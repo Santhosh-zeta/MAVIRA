@@ -1,0 +1,448 @@
+# =============================================================================
+# MAVIRA — Assessment Methodology Configuration
+# -----------------------------------------------------------------------------
+# Every weight, threshold, mapping and rule used by the deterministic engines
+# lives in this file. Nothing here is duplicated in Python code.
+#
+# On startup the file is hashed and registered as a methodology version in the
+# database. Edits made from the Methodology page create a NEW version; earlier
+# assessments keep a pointer to the version they were scored with, so historic
+# results are always reproducible.
+# =============================================================================
+
+version: "1.0.0"
+name: "MAVIRA Vendor AI Risk Methodology"
+owner: "Meridian Third-Party Risk"
+
+# -----------------------------------------------------------------------------
+# 1. CRITICALITY ENGINE
+# Business-impact ranking derived ONLY from the provided inventory columns
+# (Operational Dependency, Data Classification Accessed, Data Volume, Category,
+# Business Process Supported, Service / Product Provided).
+# -----------------------------------------------------------------------------
+criticality:
+  weights:                      # must sum to 1.0
+    operational_dependency: 0.30
+    data_sensitivity: 0.25
+    payment_flow: 0.15
+    regulatory_exposure: 0.15
+    data_volume: 0.15
+
+  thresholds:                   # score >= threshold -> tier (evaluated top-down)
+    CRITICAL: 0.75
+    HIGH: 0.55
+    MEDIUM: 0.35
+    LOW: 0.0
+
+  operational_dependency_map:   # value of the "Operational Dependency" column
+    total: 1.0
+    critical: 1.0
+    high: 0.75
+    moderate: 0.5
+    medium: 0.5
+    low: 0.25
+    default: 0.5                # unrecognised value -> flagged in rationale
+
+  # Ordered rules over "Data Classification Accessed". The highest-scoring
+  # matching rule wins. Each match is quoted in the rationale.
+  data_sensitivity_rules:
+    - id: full_customer_financial
+      label: "Full customer financial records (master data, balances, transactions)"
+      score: 1.0
+      any: ["customer master", "balances and transactions", "full customer"]
+    - id: special_category
+      label: "Special-category personal data (health, vulnerability, biometric or voice recordings)"
+      score: 1.0
+      any: ["health", "vulnerability", "biometric", "call audio", "voice recording"]
+    - id: tax_identifiers
+      label: "Tax identifiers / government identifiers for customers"
+      score: 1.0
+      any: ["tax identifier", "ssn", "social security", "date of birth", "dates of birth"]
+    - id: account_level_pii
+      label: "Customer PII with account numbers and balances"
+      score: 0.9
+      any: ["account numbers", "balances"]
+    - id: payment_instructions
+      label: "Payment instructions, counterparty and account identifiers"
+      score: 0.8
+      any: ["payment instruction", "account identifier", "counterparty"]
+    - id: privileged_access
+      label: "Privileged access to production systems / service credentials"
+      score: 0.75
+      any: ["privileged access", "credential", "system configuration"]
+    - id: wealth_financial
+      label: "Client portfolio, revenue or compensation data"
+      score: 0.7
+      any: ["portfolio", "holdings", "compensation", "revenue"]
+    - id: payment_in_transit
+      label: "Payment messages in transit only"
+      score: 0.6
+      any: ["in transit"]
+    - id: no_customer_data
+      label: "No direct customer data"
+      score: 0.2
+      any: ["no direct customer data", "no customer data"]
+  data_sensitivity_default: 0.4
+
+  # Payment-flow involvement, matched over Category + Business Process + Service.
+  payment_flow_rules:
+    - id: payment_rail
+      label: "Directly operates or transmits payments (clearing, settlement, RTP/ACH)"
+      score: 1.0
+      any: ["clearing", "settlement", "real-time payment", "real time payment", "rtp", "ach", "inbound real-time payments", "payments infrastructure"]
+    - id: core_processing
+      label: "Core account and transaction processing"
+      score: 0.9
+      any: ["core account processing", "transaction processing", "core banking", "core platform"]
+    - id: payment_adjacent
+      label: "Supports payment or batch processing indirectly"
+      score: 0.4
+      any: ["batch", "commission", "billing"]
+  payment_flow_default: 0.1
+
+  # Regulatory exposure, matched over all provided text columns.
+  regulatory_rules:
+    - id: tax_regulatory_reporting
+      label: "Produces regulatory notices or tax reporting (e.g. IRS documents)"
+      score: 1.0
+      any: ["irs", "tax document", "regulatory notice"]
+    - id: core_banking_records
+      label: "Holds the system of record for regulated customer accounts"
+      score: 1.0
+      any: ["core banking", "core account processing", "customer master"]
+    - id: payment_system_regulation
+      label: "Operates within regulated payment-system rules (RTP / ACH / clearing)"
+      score: 0.9
+      any: ["rtp", "ach", "clearing", "real-time payment", "real time payment", "payment"]
+    - id: wealth_compliance
+      label: "Supports advisor compensation / wealth compliance obligations"
+      score: 0.6
+      any: ["compliance", "advisor compensation", "wealth"]
+    - id: production_change
+      label: "Privileged change capability over regulated production systems"
+      score: 0.5
+      any: ["privileged access", "production"]
+  regulatory_default: 0.3
+
+  # Volume: parsed from "Data Volume (annual)" AND customer populations named in
+  # "Data Classification Accessed". Log-scaled between min and max.
+  volume:
+    log_min: 1000               # <= 1,000 records -> 0.0
+    log_max: 100000000          # >= 100 million records -> 1.0
+    population_phrases:         # phrases that mean the whole customer base
+      - "entire customer base"
+      - "all customers"
+    population_phrase_score: 1.0
+    not_applicable_phrases: ["not applicable", "n/a", "none"]
+
+  # Escalation rules: transparent floors applied after the weighted score.
+  escalation_rules:
+    - id: total_dependency_sensitive
+      description: "Critical/Total operational dependency combined with sensitive data or payment-rail role"
+      when:
+        operational_dependency_gte: 1.0
+        any_factor_gte: {data_sensitivity: 0.9, payment_flow: 0.9}
+      floor: CRITICAL
+    - id: sensitive_data_at_scale
+      description: "Highest-sensitivity customer data at material scale with High or greater operational dependency"
+      when:
+        operational_dependency_gte: 0.75
+        all_factors_gte: {data_sensitivity: 1.0, data_volume: 0.5}
+      floor: CRITICAL
+    - id: privileged_production_access
+      description: "Privileged access to production systems that run core processing (credential compromise path)"
+      when:
+        data_sensitivity_rule: privileged_access
+        operational_dependency_gte: 0.75
+      floor: HIGH
+
+# -----------------------------------------------------------------------------
+# 2. ASSESSMENT DEPTH ENGINE — tier -> investigation scope
+# -----------------------------------------------------------------------------
+assessment_depth:
+  tiers:
+    LOW:
+      label: "Baseline review"
+      rationale: >-
+        Limited business impact. Confirm whether AI is part of the service from the
+        vendor's own product material; deeper work is not proportionate.
+      source_categories: [official_website, product_pages, ai_documentation]
+      max_sources: 4
+      min_independent_sources: 1
+      negative_evidence_review: false
+      provider_investigation: false
+      human_review_required: false
+    MEDIUM:
+      label: "Standard review"
+      rationale: >-
+        Moderate impact. Adds hiring, engineering and trust material, which reveal
+        AI that marketing pages omit.
+      source_categories: [official_website, product_pages, ai_documentation, careers, engineering_blog, developer_docs, trust_security, partner_pages]
+      max_sources: 8
+      min_independent_sources: 1
+      negative_evidence_review: false
+      provider_investigation: false
+      human_review_required: false
+    HIGH:
+      label: "Enhanced review"
+      rationale: >-
+        High impact. Adds regulatory/investor disclosures, sub-processor lists and
+        executive statements, where model providers and AI risk factors are disclosed.
+      source_categories: [official_website, product_pages, ai_documentation, careers, engineering_blog, developer_docs, trust_security, partner_pages, regulatory_filings, investor_disclosures, subprocessors, press_releases, executive_statements, insights]
+      max_sources: 14
+      min_independent_sources: 2
+      negative_evidence_review: true
+      provider_investigation: true
+      human_review_required: false
+    CRITICAL:
+      label: "Full review"
+      rationale: >-
+        Critical impact. Everything in Enhanced plus targeted provider and
+        sub-processor searches, corroboration across independent sources, a
+        recorded negative-evidence review, and mandatory analyst sign-off.
+      source_categories: [official_website, product_pages, ai_documentation, careers, engineering_blog, developer_docs, trust_security, partner_pages, regulatory_filings, investor_disclosures, subprocessors, press_releases, executive_statements, insights, third_party_partner, industry_press]
+      max_sources: 24
+      min_independent_sources: 2
+      negative_evidence_review: true
+      provider_investigation: true
+      human_review_required: true
+
+  # Query templates per source category. {name} {domain} {service} are filled in.
+  query_templates:
+    official_website: ['site:{domain} "{name}"']
+    product_pages: ['site:{domain} {service}']
+    ai_documentation: ['site:{domain} "artificial intelligence" OR "machine learning" OR AI']
+    careers: ['site:{domain} careers "machine learning" OR "AI engineer"', '"{name}" "AI engineer" job']
+    engineering_blog: ['site:{domain} engineering blog AI']
+    developer_docs: ['site:{domain} developer documentation API AI']
+    trust_security: ['site:{domain} trust center OR security AI policy']
+    partner_pages: ['site:{domain} partners AI']
+    regulatory_filings: ['"{name}" 10-K "artificial intelligence"']
+    investor_disclosures: ['"{name}" investor day AI']
+    subprocessors: ['site:{domain} subprocessors OR sub-processors', '"{name}" sub-processor list']
+    press_releases: ['"{name}" press release AI']
+    executive_statements: ['"{name}" CEO OR CTO "AI" interview']
+    insights: ['site:{domain} insights AI']
+    third_party_partner: ['"{name}" OpenAI OR "Azure OpenAI" OR Anthropic OR Gemini OR Bedrock']
+    industry_press: ['"{name}" AI {service} news']
+
+# -----------------------------------------------------------------------------
+# 3. SOURCE RELIABILITY
+# -----------------------------------------------------------------------------
+source_reliability:
+  levels:
+    DIRECT: 1.0
+    MEDIUM: 0.75
+    SUPPORTING: 0.55
+    LOW: 0.25
+  # Applied in order; first match wins. "official" = same registrable domain as
+  # the vendor's Public Website (or a declared alias domain).
+  rules:
+    - {match: official, path_any: ["careers", "jobs"], source_type: official_job_posting, level: DIRECT}
+    - {match: official, path_any: ["trust", "security", "subprocessor", "sub-processor", "privacy"], source_type: vendor_trust_center, level: DIRECT}
+    - {match: official, path_any: ["docs", "developer", "documentation", "api"], source_type: official_technical_documentation, level: DIRECT}
+    - {match: official, path_any: ["artificial-intelligence", "/ai", "/artificial-intelligence"], source_type: official_ai_documentation, level: DIRECT}
+    - {match: official, path_any: ["news-release", "press", "newsroom"], source_type: official_press_release, level: MEDIUM}
+    - {match: official, path_any: ["investor", "static-files"], source_type: investor_disclosure, level: MEDIUM}
+    - {match: official, path_any: ["insights", "blog", "articles-and-blogs", "resources", "articles"], source_type: official_insights_article, level: MEDIUM}
+    - {match: official, path_any: [], source_type: official_product_page, level: DIRECT}
+    - {match: domain, domains: ["sec.gov"], source_type: regulatory_filing, level: DIRECT}
+    - {match: domain, domains: ["openai.com", "microsoft.com", "googlecloudpresscorner.com", "cloud.google.com", "aws.amazon.com", "anthropic.com", "nvidia.com"], source_type: official_partner_announcement, level: MEDIUM}
+    - {match: domain, domains: ["reuters.com", "wsj.com", "ft.com", "bloomberg.com", "americanbanker.com", "pymnts.com", "fortune.com", "businesswire.com"], source_type: credible_news, level: SUPPORTING}
+    - {match: domain, domains: ["linkedin.com", "medium.com", "facebook.com", "x.com", "twitter.com", "tracxn.com", "appsruntheworld.com", "birdeye.com", "crunchbase.com"], source_type: unverified_social_or_aggregator, level: LOW}
+    - {match: any, source_type: third_party_web, level: LOW}
+  # Investor relations sub-domains etc. that count as official for a vendor.
+  alias_domains:
+    "fiserv.com": ["investors.fiserv.com", "careers.fiserv.com"]
+
+# -----------------------------------------------------------------------------
+# 4. EVIDENCE STRENGTH (per evidence record, 0-100)
+# -----------------------------------------------------------------------------
+evidence_strength:
+  weights:
+    source_reliability: 0.30
+    directness: 0.20
+    specificity: 0.20
+    service_relevance: 0.15
+    independence: 0.05
+    recency: 0.10
+  directness:
+    vendor_self_statement: 1.0
+    third_party_about_vendor: 0.7
+    commentary: 0.2
+  recency_months:               # age of published_date -> score
+    - {max: 12, score: 1.0}
+    - {max: 24, score: 0.7}
+    - {max: 48, score: 0.4}
+    - {max: 99999, score: 0.2}
+  recency_unknown: 0.5
+  independence:
+    corroborated: 1.0           # same AI type evidenced on another domain
+    single_source: 0.5
+  levels:
+    VERY_STRONG: 80
+    STRONG: 65
+    MODERATE: 45
+    WEAK: 0
+
+# -----------------------------------------------------------------------------
+# 5. AI SIGNAL CLASSIFICATION
+# -----------------------------------------------------------------------------
+ai_classification:
+  # How much each signal nature contributes to AI exposure (risk engine) and
+  # whether it can support a YES determination.
+  nature_weights:
+    SERVICE_INTEGRATED: 1.0
+    PRODUCT_FEATURE: 0.85
+    PARTNER_DEPENDENCY: 0.6
+    INTERNAL_OPERATIONAL_USE: 0.5
+    HIRING_SIGNAL: 0.35
+    UNKNOWN: 0.2
+    MARKETING_ONLY: 0.1
+    INDUSTRY_COMMENTARY: 0.0
+  confirming_natures: [SERVICE_INTEGRATED, PRODUCT_FEATURE]
+  yes_rule:
+    single_signal_min_strength: 65        # one confirming signal >= STRONG
+    multi_signal_min_strength: 45         # or two confirming signals >= MODERATE
+    multi_signal_min_distinct_sources: 2
+  service_integrated_min_relevance: 0.6
+  adjacent_product_relevance_cap: 0.6     # relevance cap when no service-specific term matches
+  negative_statement_phrases:
+    - "does not use artificial intelligence"
+    - "do not use artificial intelligence"
+    - "does not use ai"
+    - "no ai is used"
+  no_evidence_statement: "NO MEANINGFUL PUBLIC EVIDENCE IDENTIFIED WITHIN ASSESSED OSINT SCOPE"
+
+  # Category-level service keywords used for service relevance scoring.
+  category_service_keywords:
+    "core platform": ["core", "account processing", "client servic", "transaction", "deposit", "loan", "banking", "financial institutions"]
+    "payments": ["payment", "rtp", "real-time", "transaction", "fraud", "validation", "treasury", "transfer"]
+    "payments infrastructure": ["payment", "rtp", "ach", "clearing", "settlement", "network", "fraud"]
+    "document and communications": ["statement", "document", "notice", "print", "mail", "presentment", "tax"]
+    "data and reporting": ["data", "reporting", "compensation", "commission", "wealth", "advisor", "analytics"]
+    "professional services": ["workload", "automation", "batch", "job", "scheduling", "orchestration", "automic"]
+
+# -----------------------------------------------------------------------------
+# 6. AI SECURITY RISK ENGINE (0-100)
+# -----------------------------------------------------------------------------
+risk:
+  ai_presence_reference_exposure: 0.6     # exposure at which AI presence index saturates to 1.0
+  # When no validated excerpt ties AI to the contracted service itself (only
+  # vendor-level or partner evidence), AI presence is discounted by this factor.
+  service_unconfirmed_presence_factor: 0.8
+  weights:                                # must sum to 1.0
+    DATA_EXPOSURE: 0.16
+    AI_SUBPROCESSOR_RISK: 0.10
+    MODEL_PROVIDER_TRANSPARENCY: 0.08
+    DATA_RETENTION_RISK: 0.08
+    MODEL_TRAINING_RISK: 0.08
+    DECISION_IMPACT: 0.14
+    OPERATIONAL_DEPENDENCY: 0.14
+    REGULATORY_RISK: 0.12
+    CONTRACTUAL_RISK: 0.10
+  thresholds:                             # score >= threshold -> class (top-down)
+    CRITICAL: 75
+    HIGH: 50
+    MEDIUM: 25
+    LOW: 0.01
+  provider_uncertainty:                   # AI_SUBPROCESSOR_RISK base
+    not_disclosed: 1.0
+    enterprise_level_only: 0.6
+    service_linked: 0.3
+  provider_transparency:                  # MODEL_PROVIDER_TRANSPARENCY base
+    not_disclosed: 1.0
+    enterprise_level_only: 0.5
+    service_linked: 0.2
+  unknown_retention: 0.8
+  unknown_training: 0.8
+  stated_no_training: 0.3
+  contractual_unknown: 0.7                # Meridian contract AI clauses not in input
+  decision_impact_by_type:                # max over detected AI types
+    "Agentic AI": 1.0
+    "Fraud Detection": 0.9
+    "Risk Scoring": 0.9
+    "AI-assisted Automation": 0.8
+    "Speech/Voice AI": 0.7
+    "Document Intelligence": 0.7
+    "Generative AI": 0.6
+    "Predictive Analytics": 0.6
+    "NLP": 0.5
+    "Machine Learning": 0.5
+    "Recommendation Systems": 0.5
+    "Computer Vision": 0.5
+    "Other": 0.4
+    "Unknown": 0.4
+  floors:
+    - id: confirmed_ai_critical_vendor_undisclosed_provider
+      description: "Confirmed AI in a Critical-tier vendor without a service-linked model provider"
+      when: {ai_usage: "YES", criticality: "CRITICAL", provider_status_not: "service_linked"}
+      floor: HIGH
+
+# -----------------------------------------------------------------------------
+# 7. RECOMMENDATION RULES (evaluated in order; all matches are emitted)
+# -----------------------------------------------------------------------------
+recommendations:
+  due_days_by_priority: {P1: 15, P2: 30, P3: 60, P4: 90}
+  monitoring_months_by_tier: {CRITICAL: 3, HIGH: 6, MEDIUM: 12, LOW: 12}
+  rules:
+    - id: questionnaire_inconclusive_high_tier
+      when: {ai_usage_in: [INCONCLUSIVE], criticality_in: [CRITICAL, HIGH]}
+      priority: P2
+      category: QUESTIONNAIRE
+      action: "Issue a targeted AI-usage questionnaire: public material is inconclusive and absence of public evidence is not evidence of absence. Ask directly whether AI or ML processes Meridian data in the {service_short} service."
+    - id: provider_disclosure
+      when: {ai_presence_gte: 0.3, provider_status_in: [not_disclosed, enterprise_level_only]}
+      priority: P1
+      category: SUBPROCESSOR
+      action: "Request written disclosure of AI sub-processors and model providers used in the {service_short} service, including hosting region. {provider_note}"
+    - id: data_to_external_models
+      when: {ai_usage_in: ["YES"], data_sensitivity_gte: 0.7}
+      priority: P1
+      category: DATA_FLOW
+      action: "Confirm whether Meridian customer data is sent to external or third-party models; obtain a data-flow diagram for AI components touching Meridian data."
+    - id: retention_terms
+      when: {ai_presence_gte: 0.3}
+      priority: P2
+      category: RETENTION
+      action: "Obtain model input/output retention terms (prompts, logs, embeddings) and deletion commitments for Meridian data."
+    - id: training_restriction
+      when: {ai_presence_gte: 0.3}
+      priority: P2
+      category: TRAINING
+      action: "Obtain a contractual commitment that Meridian data is not used to train, fine-tune or evaluate vendor or third-party models."
+    - id: human_oversight
+      when: {decision_impact_gte: 0.8, ai_presence_gte: 0.5}
+      priority: P1
+      category: OVERSIGHT
+      action: "Require documented human-oversight thresholds and override controls for AI-driven decisions ({decision_types})."
+    - id: partner_platform_ai
+      when: {nature_present: PARTNER_DEPENDENCY, implements_third_party_platform: true}
+      priority: P2
+      category: CONFIGURATION
+      action: "Confirm whether AI features of the third-party platform the vendor implements are enabled in Meridian's environment, which LLM is configured, and whether job logs, scripts or credentials can reach that model."
+    - id: vendor_disclosed_third_party_model_risk
+      when: {evidence_phrase_any: ["third-party artificial intelligence models", "third-party ai models"]}
+      priority: P2
+      category: ASSURANCE
+      action: "The vendor's own public disclosure flags reliance on third-party model safeguards. Request evidence of the controls it applies over third-party AI model integration."
+    - id: contract_clauses
+      when: {ai_presence_gte: 0.3, criticality_in: [CRITICAL, HIGH, MEDIUM]}
+      priority: P3
+      category: CONTRACT
+      action: "Raise AI clauses at the next contract review: training restrictions, sub-processor change notification, human-oversight thresholds, and rights to review AI-related attestations."
+    - id: periodic_ai_question
+      when: {ai_usage_in: [INCONCLUSIVE], criticality_in: [MEDIUM, LOW]}
+      priority: P3
+      category: QUESTIONNAIRE
+      action: "Add AI-usage confirmation questions to the next periodic due-diligence review; public material does not establish whether AI processes Meridian data."
+    - id: escalate_unconfirmed
+      when: {criticality_in: [CRITICAL], ai_usage_in: ["YES"]}
+      priority: P2
+      category: GOVERNANCE
+      action: "Register the vendor on the AI sub-processor inventory and escalate to the Third-Party Risk Committee if disclosures are not received by the due date."
+    - id: monitor
+      when: {always: true}
+      priority: P4
+      category: MONITORING
+      action: "Monitor the vendor's public AI disclosures and re-run this assessment every {monitor_months} months or on any material announcement."

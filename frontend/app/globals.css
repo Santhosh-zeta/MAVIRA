@@ -1,0 +1,65 @@
+@import "tailwindcss";
+@import "@fontsource/public-sans/400.css";
+@import "@fontsource/public-sans/500.css";
+@import "@fontsource/public-sans/600.css";
+@import "@fontsource/public-sans/700.css";
+@import "@fontsource/source-serif-4/400.css";
+@import "@fontsource/source-serif-4/400-italic.css";
+@import "@fontsource/source-serif-4/600.css";
+
+@theme {
+  --font-sans: "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Source Serif 4", Georgia, serif;
+
+  --color-paper: #F4F6F5;
+  --color-surface: #FFFFFF;
+  --color-ink: #1E2A2D;
+  --color-ink-2: #4A5A5E;
+  --color-ink-3: #7A8A8D;
+  --color-rule: #D6DCD9;
+  --color-rule-2: #E8ECEA;
+  --color-rail: #1E2A2D;
+  --color-rail-2: #2A383C;
+  --color-pine: #2F5D50;
+  --color-pine-2: #E3ECE8;
+  --color-highlight: #F7EDB8;
+  --color-highlight-edge: #D9C76A;
+
+  --color-sev-critical: #8E1F1F;
+  --color-sev-critical-bg: #F6E4E2;
+  --color-sev-high: #B4471A;
+  --color-sev-high-bg: #F8E8DD;
+  --color-sev-medium: #946A12;
+  --color-sev-medium-bg: #F6EED7;
+  --color-sev-low: #4D6E33;
+  --color-sev-low-bg: #E7EFDF;
+  --color-sev-none: #6B7A7D;
+  --color-sev-none-bg: #ECEFEE;
+}
+
+@layer base {
+  html { font-feature-settings: "tnum" 1, "kern" 1; }
+  body { background: var(--color-paper); color: var(--color-ink); font-family: var(--font-sans); font-size: 14px; line-height: 1.5; }
+  h1, h2, h3 { color: var(--color-ink); letter-spacing: -0.01em; }
+  :focus-visible { outline: 2px solid var(--color-pine); outline-offset: 2px; border-radius: 3px; }
+  ::selection { background: var(--color-highlight); }
+}
+
+/* Verbatim source text: the one deliberately loud element of the interface */
+.source-fact {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--color-ink);
+}
+.source-fact mark, mark.hl {
+  background: linear-gradient(to bottom, transparent 8%, var(--color-highlight) 8%, var(--color-highlight) 92%, transparent 92%);
+  color: inherit;
+  padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

@@ -1,0 +1,91 @@
+name: mavira
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://mavira:${POSTGRES_PASSWORD:-mavira}@postgres:5432/mavira
+  REDIS_URL: redis://redis:6379/0
+  WORKER_MODE: rq
+  OSINT_MODE: ${OSINT_MODE:-DEMO}
+  SEARCH_PROVIDER: ${SEARCH_PROVIDER:-none}
+  TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+  SERPER_API_KEY: ${SERPER_API_KEY:-}
+  BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+  LLM_PROVIDER: ${LLM_PROVIDER:-none}
+  LLM_MODEL: ${LLM_MODEL:-}
+  LLM_API_BASE: ${LLM_API_BASE:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  AZURE_API_KEY: ${AZURE_API_KEY:-}
+  AZURE_API_BASE: ${AZURE_API_BASE:-}
+  AZURE_API_VERSION: ${AZURE_API_VERSION:-}
+  API_KEY: ${API_KEY:-}
+  ASSESSOR_TEAM: ${ASSESSOR_TEAM:-Team MAVIRA}
+  DEMO_STEP_DELAY_MS: ${DEMO_STEP_DELAY_MS:-150}
+  CORS_ORIGINS: http://localhost:3000
+  STORAGE_DIR: /data/storage
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mavira
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mavira}
+      POSTGRES_DB: mavira
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mavira -d mavira"]
+      interval: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        INSTALL_LLM: ${INSTALL_LLM:-false}
+    environment: *backend-env
+    volumes: [storage:/data/storage]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    ports: ["127.0.0.1:8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 5s
+      retries: 30
+
+  worker:
+    build:
+      context: ./backend
+      args:
+        INSTALL_LLM: ${INSTALL_LLM:-false}
+    command: ["python", "-m", "app.workers.worker"]
+    environment: *backend-env
+    volumes: [storage:/data/storage]
+    depends_on:
+      backend: {condition: service_healthy}
+
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+      MAVIRA_API_KEY: ${API_KEY:-}
+    depends_on:
+      backend: {condition: service_healthy}
+    ports: ["127.0.0.1:3000:3000"]
+
+  adminer:
+    image: adminer:4
+    profiles: [admin]
+    depends_on: [postgres]
+    ports: ["127.0.0.1:8081:8080"]
+
+volumes:
+  pgdata:
+  storage:
