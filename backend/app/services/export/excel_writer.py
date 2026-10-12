@@ -193,6 +193,7 @@ def export_workbook(db: Session, imp: WorkbookImport, assessments: list[Assessme
     _append(me, ["Run", "Methodology version", run.get("methodology_version", "")])
     _append(me, ["Run", "OSINT mode", run.get("osint_mode", "")])
     _append(me, ["Run", "Analyzer", run.get("analyzer", "")])
+    _append(me, ["Run", "Assessed by team", team])
     for sect in ("criticality", "risk", "evidence_strength"):
         for k, v in methodology_cfg[sect]["weights"].items():
             _append(me, [f"{sect} weight", k, v])
@@ -202,6 +203,19 @@ def export_workbook(db: Session, imp: WorkbookImport, assessments: list[Assessme
         _append(me, ["assessment depth", f"{tier} — {t['label']}", t["rationale"].strip()])
     _append(me, ["note", "Collection methods", "LIVE = fetched during the run; CACHED = verbatim snapshot captured "
                                                 "in an earlier analyst session (retrieval date shown); DEMO_MOCK = fictional test data."])
+    # Regulatory standards citations
+    standards = [
+        ("regulatory standard", "NIST AI RMF (2023)", "AI risk identification (MAP-1.1), sub-processor disclosure (GV-6.2), data-flow mapping (MS-2.5), retention (MS-2.6), ongoing monitoring (MS-2.8)"),
+        ("regulatory standard", "FFIEC SR 11-7 / OCC 2011-12", "Model Risk Management — third-party AI models are in scope where vendor output influences Meridian decisions"),
+        ("regulatory standard", "OCC 2023-17", "Third-party AI arrangements; sub-processor disclosure (§III.C); AI contract clauses (§IV)"),
+        ("regulatory standard", "OCC 2026-46", "Prohibition on training on client data without consent; AI governance expectations for supervised institutions"),
+        ("regulatory standard", "Fed SR 23-4", "Federal Reserve guidance on AI in banking and model risk oversight"),
+        ("regulatory standard", "CFPB Circular 2022-03", "Explainability requirements for AI-driven credit and payment decisions"),
+        ("regulatory standard", "NIST CSF 2.0 / SP 800-161r1", "AI supply-chain risk governance (GV.SC-07); Cyber Supply-Chain Risk Management (C-SCRM)"),
+        ("regulatory standard", "OWASP LLM 2026 / Agentic Top-10", "Prompt injection (LLM01); third-party model supply-chain (LLM09); agentic scope restriction; immutable audit logs"),
+    ]
+    for row in standards:
+        _append(me, list(row))
 
     buf = io.BytesIO()
     wb.save(buf)

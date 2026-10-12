@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     fetch_max_bytes: int = 3_000_000
     fetch_retries: int = 2
     per_domain_min_interval_seconds: float = 1.5
-    user_agent: str = "MAVIRA-OSINT/1.0 (third-party risk assessment; respects robots.txt)"
+    user_agent: str = "Team MAVIRA devo1@dropwinggroups.com (third-party risk assessment; respects robots.txt)"
     source_cache_ttl_hours: int = 24 * 7
     demo_step_delay_ms: int = 150          # visible pacing only; 0 in tests
 

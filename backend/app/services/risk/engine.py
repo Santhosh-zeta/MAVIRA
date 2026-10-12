@@ -125,6 +125,10 @@ def calculate(inp: RiskInputs, methodology) -> RiskResult:
         ok = inp.ai_usage == cond.get("ai_usage", inp.ai_usage) and inp.criticality_tier == cond.get("criticality", inp.criticality_tier)
         if "provider_status_not" in cond:
             ok &= ps != cond["provider_status_not"]
+        if "data_sensitivity_gte" in cond:
+            ok &= inp.data_sensitivity >= float(cond["data_sensitivity_gte"])
+        if "ai_type_present" in cond:
+            ok &= cond["ai_type_present"] in inp.ai_types
         if ok and CLASS_ORDER.index(f["floor"]) > CLASS_ORDER.index(final):
             floors.append({"rule": f["id"], "description": f["description"], "from": final, "to": f["floor"]})
             final = f["floor"]

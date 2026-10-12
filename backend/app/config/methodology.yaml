@@ -10,7 +10,7 @@
 # results are always reproducible.
 # =============================================================================
 
-version: "1.0.0"
+version: "1.1.0"
 name: "MAVIRA Vendor AI Risk Methodology"
 owner: "Meridian Third-Party Risk"
 
@@ -54,10 +54,14 @@ criticality:
       label: "Special-category personal data (health, vulnerability, biometric or voice recordings)"
       score: 1.0
       any: ["health", "vulnerability", "biometric", "call audio", "voice recording"]
+    - id: payment_card_data
+      label: "Payment card data (PAN, cardholder, CVV, card numbers)"
+      score: 1.0
+      any: ["pan", "cardholder", "card number", "credit card number", "payment card", "card data", "card holder"]
     - id: tax_identifiers
       label: "Tax identifiers / government identifiers for customers"
       score: 1.0
-      any: ["tax identifier", "ssn", "social security", "date of birth", "dates of birth"]
+      any: ["tax identifier", "ssn", "social security", "date of birth", "dates of birth", "national identifier"]
     - id: account_level_pii
       label: "Customer PII with account numbers and balances"
       score: 0.9
@@ -110,10 +114,30 @@ criticality:
       label: "Holds the system of record for regulated customer accounts"
       score: 1.0
       any: ["core banking", "core account processing", "customer master"]
+    - id: aml_kyc_bsa
+      label: "Operates within AML / KYC / BSA-regulated processes"
+      score: 1.0
+      any: ["aml", "anti-money laundering", "kyc", "know your customer", "bsa", "bank secrecy", "sanctions screening", "cdd", "customer due diligence"]
+    - id: consumer_lending_regulation
+      label: "Consumer lending regulated under TILA, ECOA, or FCRA"
+      score: 0.9
+      any: ["consumer lending", "consumer loan", "loan servicing", "mortgage", "credit decision", "credit underwriting", "ecoa", "tila", "fcra", "hmda", "fair lending"]
     - id: payment_system_regulation
       label: "Operates within regulated payment-system rules (RTP / ACH / clearing)"
       score: 0.9
-      any: ["rtp", "ach", "clearing", "real-time payment", "real time payment", "payment"]
+      any: ["rtp", "ach", "clearing", "real-time payment", "real time payment", "payment", "nacha"]
+    - id: deposit_accounts
+      label: "Holds or services regulated deposit accounts"
+      score: 0.8
+      any: ["deposit account", "deposit accounts", "demand deposit", "savings account", "fdic insured"]
+    - id: collections_servicing
+      label: "Debt collection or servicing regulated under FDCPA or state law"
+      score: 0.7
+      any: ["collections", "debt collection", "loan servicing", "fdcpa"]
+    - id: federal_supervision
+      label: "Subject to OCC, Fed, CFPB or FFIEC supervision or examination"
+      score: 0.8
+      any: ["occ", "cfpb", "ffiec", "federal reserve", "fed sr", "sr 11-7", "occ 2023-17", "examination", "supervisory"]
     - id: wealth_compliance
       label: "Supports advisor compensation / wealth compliance obligations"
       score: 0.6
@@ -133,7 +157,7 @@ criticality:
       - "entire customer base"
       - "all customers"
     population_phrase_score: 1.0
-    not_applicable_phrases: ["not applicable", "n/a", "none"]
+    not_applicable_phrases: ["not applicable", "n/a", "none", "unknown", "not known", "not available"]
 
   # Escalation rules: transparent floors applied after the weighted score.
   escalation_rules:
@@ -148,6 +172,18 @@ criticality:
       when:
         operational_dependency_gte: 0.75
         all_factors_gte: {data_sensitivity: 1.0, data_volume: 0.5}
+      floor: CRITICAL
+    - id: payment_rail_high_sensitivity
+      description: "Vendor directly operates a payment rail (RTP/ACH/clearing) AND handles sensitive customer data — systemic risk and data exposure intersect"
+      when:
+        payment_flow_score_gte: 1.0
+        data_sensitivity_gte: 0.6
+      floor: CRITICAL
+    - id: core_banking_high_dependency
+      description: "Vendor is the system of record for regulated customer accounts with high operational dependency — failure is a regulatory breach event"
+      when:
+        payment_flow_score_gte: 0.9
+        operational_dependency_gte: 0.75
       floor: CRITICAL
     - id: privileged_production_access
       description: "Privileged access to production systems that run core processing (credential compromise path)"
@@ -378,6 +414,14 @@ risk:
       description: "Confirmed AI in a Critical-tier vendor without a service-linked model provider"
       when: {ai_usage: "YES", criticality: "CRITICAL", provider_status_not: "service_linked"}
       floor: HIGH
+    - id: confirmed_ai_critical_high_data_sensitivity
+      description: "Confirmed AI in a Critical-tier vendor with high data sensitivity (≥0.8) — data exfiltration via model boundary is a material threat at this sensitivity level (NIST AI RMF MS-2.5, FFIEC SR 11-7)"
+      when: {ai_usage: "YES", criticality: "CRITICAL", data_sensitivity_gte: 0.8}
+      floor: CRITICAL
+    - id: confirmed_ai_critical_agentic
+      description: "Agentic AI in a Critical-tier vendor introduces autonomous decision-making risk at systemic scale (NIST AI RMF GV-6.2, OCC 2023-17)"
+      when: {ai_usage: "YES", criticality: "CRITICAL", ai_type_present: "Agentic AI"}
+      floor: CRITICAL
 
 # -----------------------------------------------------------------------------
 # 7. RECOMMENDATION RULES (evaluated in order; all matches are emitted)
@@ -390,59 +434,74 @@ recommendations:
       when: {ai_usage_in: [INCONCLUSIVE], criticality_in: [CRITICAL, HIGH]}
       priority: P2
       category: QUESTIONNAIRE
-      action: "Issue a targeted AI-usage questionnaire: public material is inconclusive and absence of public evidence is not evidence of absence. Ask directly whether AI or ML processes Meridian data in the {service_short} service."
+      action: "Issue a targeted AI-usage questionnaire: public material is inconclusive and absence of public evidence is not evidence of absence. Ask directly whether AI or ML processes Meridian data in the {service_short} service. (NIST AI RMF MAP-1.1; FFIEC IT Handbook — Third-Party Risk)"
     - id: provider_disclosure
       when: {ai_presence_gte: 0.3, provider_status_in: [not_disclosed, enterprise_level_only]}
       priority: P1
       category: SUBPROCESSOR
-      action: "Request written disclosure of AI sub-processors and model providers used in the {service_short} service, including hosting region. {provider_note}"
+      action: "Request written disclosure of AI sub-processors and model providers used in the {service_short} service, including hosting region and data residency. {provider_note} (NIST AI RMF GV-6.2; OCC 2023-17 §III.C; NIST SP 800-161r1)"
     - id: data_to_external_models
       when: {ai_usage_in: ["YES"], data_sensitivity_gte: 0.7}
       priority: P1
       category: DATA_FLOW
-      action: "Confirm whether Meridian customer data is sent to external or third-party models; obtain a data-flow diagram for AI components touching Meridian data."
+      action: "Confirm whether Meridian customer data is sent to external or third-party models; obtain a data-flow diagram for AI components touching Meridian data. Evaluate whether transmission falls within permitted uses under Gramm-Leach-Bliley and OCC guidance on third-party arrangements. (NIST AI RMF MS-2.5; OCC 2023-17; GLBA §501)"
     - id: retention_terms
       when: {ai_presence_gte: 0.3}
       priority: P2
       category: RETENTION
-      action: "Obtain model input/output retention terms (prompts, logs, embeddings) and deletion commitments for Meridian data."
+      action: "Obtain model input/output retention terms (prompts, logs, embeddings) and deletion commitments for Meridian data. Confirm compliance with Meridian's records-retention policy and applicable regulatory requirements. (NIST AI RMF MS-2.6; FFIEC Information Security Handbook §IV.C)"
     - id: training_restriction
       when: {ai_presence_gte: 0.3}
       priority: P2
       category: TRAINING
-      action: "Obtain a contractual commitment that Meridian data is not used to train, fine-tune or evaluate vendor or third-party models."
+      action: "Obtain a contractual commitment that Meridian data is not used to train, fine-tune or evaluate vendor or third-party models. Absence of such a clause is a material gap under current interagency AI guidance. (NIST AI RMF GV-1.6; OCC 2026-46; Fed SR 23-4)"
     - id: human_oversight
       when: {decision_impact_gte: 0.8, ai_presence_gte: 0.5}
       priority: P1
       category: OVERSIGHT
-      action: "Require documented human-oversight thresholds and override controls for AI-driven decisions ({decision_types})."
+      action: "Require documented human-oversight thresholds and override controls for AI-driven decisions ({decision_types}). Ensure explainability standards meet ECOA / fair-lending requirements where applicable. (NIST AI RMF GV-6.2; FFIEC SR 11-7; CFPB Circular 2022-03)"
+    - id: agentic_ai_controls
+      when: {nature_present: SERVICE_INTEGRATED, decision_impact_gte: 0.9}
+      priority: P1
+      category: OVERSIGHT
+      action: "Agentic AI detected in the contracted service. Require: (a) explicit scope restrictions preventing the agent from initiating unreviewed transactions, (b) immutable audit logs, (c) human-in-the-loop gates for irreversible actions. (OWASP LLM Agentic 2026; NIST AI RMF MS-2.7)"
     - id: partner_platform_ai
       when: {nature_present: PARTNER_DEPENDENCY, implements_third_party_platform: true}
       priority: P2
       category: CONFIGURATION
-      action: "Confirm whether AI features of the third-party platform the vendor implements are enabled in Meridian's environment, which LLM is configured, and whether job logs, scripts or credentials can reach that model."
+      action: "Confirm whether AI features of the third-party platform the vendor implements are enabled in Meridian's environment, which LLM is configured, and whether job logs, scripts or credentials can reach that model. (NIST SP 800-161r1; OCC 2023-17 §III.B)"
     - id: vendor_disclosed_third_party_model_risk
       when: {evidence_phrase_any: ["third-party artificial intelligence models", "third-party ai models"]}
       priority: P2
       category: ASSURANCE
-      action: "The vendor's own public disclosure flags reliance on third-party model safeguards. Request evidence of the controls it applies over third-party AI model integration."
+      action: "The vendor's own public disclosure flags reliance on third-party model safeguards. Request evidence of the controls it applies over third-party AI model integration, including OWASP LLM Top-10 mitigations for prompt injection and supply-chain risk. (OWASP LLM 2026 LLM01, LLM09; NIST AI RMF MS-2.3)"
+    - id: regulatory_ai_model_risk
+      when: {ai_usage_in: ["YES"], criticality_in: [CRITICAL, HIGH]}
+      priority: P2
+      category: REGULATORY
+      action: "Evaluate whether the vendor's AI usage constitutes a 'model' under SR 11-7 / OCC 2011-12 and requires Meridian to extend its Model Risk Management programme to cover this third-party model. Document the determination. (FFIEC SR 11-7; OCC 2011-12; OCC 2023-17)"
     - id: contract_clauses
       when: {ai_presence_gte: 0.3, criticality_in: [CRITICAL, HIGH, MEDIUM]}
       priority: P3
       category: CONTRACT
-      action: "Raise AI clauses at the next contract review: training restrictions, sub-processor change notification, human-oversight thresholds, and rights to review AI-related attestations."
+      action: "Raise AI clauses at the next contract review: training restrictions, sub-processor change notification, human-oversight thresholds, incident notification (≤72 hrs), and rights to audit AI-related attestations. (OCC 2023-17 §IV; NIST AI RMF GV-1.6; NIST CSF 2.0 GV.SC-07)"
     - id: periodic_ai_question
       when: {ai_usage_in: [INCONCLUSIVE], criticality_in: [MEDIUM, LOW]}
       priority: P3
       category: QUESTIONNAIRE
-      action: "Add AI-usage confirmation questions to the next periodic due-diligence review; public material does not establish whether AI processes Meridian data."
+      action: "Add AI-usage confirmation questions to the next periodic due-diligence review; public material does not establish whether AI processes Meridian data. (NIST AI RMF MAP-1.1; FFIEC Third-Party Risk Guidance)"
     - id: escalate_unconfirmed
       when: {criticality_in: [CRITICAL], ai_usage_in: ["YES"]}
       priority: P2
       category: GOVERNANCE
-      action: "Register the vendor on the AI sub-processor inventory and escalate to the Third-Party Risk Committee if disclosures are not received by the due date."
+      action: "Register the vendor on the AI sub-processor inventory and escalate to the Third-Party Risk Committee if disclosures are not received by the due date. Consider whether a board-level AI risk disclosure is required. (OCC 2026-46; Fed SR 23-4; NIST AI RMF GV-1.1)"
+    - id: nist_csf_supply_chain
+      when: {ai_usage_in: ["YES"], criticality_in: [CRITICAL, HIGH]}
+      priority: P3
+      category: SUPPLY_CHAIN
+      action: "Include this vendor in Meridian's AI supply-chain risk inventory. Verify that the vendor's sub-processors are themselves subject to equivalent AI governance and incident-notification obligations. (NIST CSF 2.0 GV.SC-07; NIST SP 800-161r1 C-SCRM)"
     - id: monitor
       when: {always: true}
       priority: P4
       category: MONITORING
-      action: "Monitor the vendor's public AI disclosures and re-run this assessment every {monitor_months} months or on any material announcement."
+      action: "Monitor the vendor's public AI disclosures and re-run this assessment every {monitor_months} months or on any material AI-related announcement, product change, or regulatory action. (NIST AI RMF MS-2.8; NIST CSF 2.0 ID.RA-10)"

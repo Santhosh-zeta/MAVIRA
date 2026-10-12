@@ -177,6 +177,10 @@ def calculate(vendor: dict[str, str | None], methodology: Methodology) -> Critic
         ok = True
         if "operational_dependency_gte" in cond:
             ok &= factors["operational_dependency"].score >= cond["operational_dependency_gte"]
+        if "data_sensitivity_gte" in cond:
+            ok &= factors["data_sensitivity"].score >= cond["data_sensitivity_gte"]
+        if "payment_flow_score_gte" in cond:
+            ok &= factors["payment_flow"].score >= cond["payment_flow_score_gte"]
         if "any_factor_gte" in cond:
             ok &= any(factors[k].score >= v for k, v in cond["any_factor_gte"].items())
         if "all_factors_gte" in cond:
