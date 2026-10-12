@@ -21,7 +21,7 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.core.security import UnsafeURLError, validate_public_url
+from app.core.security import SSRFBlockedError, UnsafeURLError, create_ssrf_safe_transport, validate_public_url
 
 log = get_logger(__name__)
 
@@ -46,8 +46,12 @@ class Fetcher:
 
     def __init__(self, settings: Settings | None = None):
         self.s = settings or get_settings()
-        self.client = httpx.Client(timeout=self.s.fetch_timeout_seconds, follow_redirects=False,
-                                   headers={"User-Agent": self.s.user_agent, "Accept": "text/html,application/xhtml+xml"})
+        self.client = httpx.Client(
+            timeout=self.s.fetch_timeout_seconds,
+            follow_redirects=False,
+            transport=create_ssrf_safe_transport(retries=0),
+            headers={"User-Agent": self.s.user_agent, "Accept": "text/html,application/xhtml+xml,application/pdf"},
+        )
         self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
         self._last_hit: dict[str, float] = {}
         self._lock = threading.Lock()
@@ -112,23 +116,36 @@ class Fetcher:
                         if r.status_code >= 400:
                             return FetchResult(url, "HTTP_ERROR", r.status_code, error=f"HTTP {r.status_code}",
                                                retries=retries, latency_ms=_ms(t0))
-                        ctype = r.headers.get("content-type", "")
-                        if "html" not in ctype and "text/plain" not in ctype:
+                        ctype = r.headers.get("content-type", "").lower()
+                        is_pdf = "pdf" in ctype or current.lower().split("?")[0].endswith(".pdf")
+                        if not is_pdf and "html" not in ctype and "text/plain" not in ctype:
                             return FetchResult(url, "UNSUPPORTED", r.status_code, error=f"content-type {ctype}",
                                                retries=retries, latency_ms=_ms(t0))
+
                         body = bytearray()
                         for chunk in r.iter_bytes():
                             body.extend(chunk)
                             if len(body) > self.s.fetch_max_bytes:
                                 break
-                        html = body.decode(r.encoding or "utf-8", errors="replace")
-                        title, text, pub = extract_html(html, current)
+
+                        if is_pdf:
+                            title, text, pub = extract_pdf(bytes(body), current)
+                        else:
+                            html = body.decode(r.encoding or "utf-8", errors="replace")
+                            title, text, pub = extract_html(html, current)
+                            # JavaScript-heavy SPA fallback: if text extracted is thin, attempt Playwright rendering
+                            if len(text.strip()) < 150:
+                                pw_title, pw_text, pw_pub = render_with_playwright(current, timeout_seconds=self.s.fetch_timeout_seconds)
+                                if pw_text and len(pw_text.strip()) > len(text.strip()):
+                                    title, text = pw_title or title, pw_text
+                                    pub = pw_pub or pub
+
                         return FetchResult(current, "OK", r.status_code, title=title, text=text,
                                            etag=r.headers.get("etag"), last_modified=r.headers.get("last-modified"),
                                            published_date=pub, retries=retries, latency_ms=_ms(t0))
                 return FetchResult(url, "ERROR", error="too many redirects", retries=retries, latency_ms=_ms(t0))
-            except UnsafeURLError as exc:
-                return FetchResult(url, "BLOCKED_URL", error=f"redirect blocked: {exc}", latency_ms=_ms(t0))
+            except (UnsafeURLError, SSRFBlockedError) as exc:
+                return FetchResult(url, "BLOCKED_URL", error=f"SSRF blocked: {exc}", latency_ms=_ms(t0))
             except httpx.TimeoutException:
                 status, err = "TIMEOUT", "request timed out"
             except httpx.HTTPError as exc:
@@ -141,6 +158,51 @@ class Fetcher:
 
 def _ms(t0: float) -> int:
     return int((time.monotonic() - t0) * 1000)
+
+
+def extract_pdf(data: bytes, url: str) -> tuple[str | None, str, str | None]:
+    """Extract text and metadata from PDF bytes using pypdf."""
+    title, text, published = None, "", None
+    try:
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        if reader.metadata:
+            if reader.metadata.title:
+                title = str(reader.metadata.title).strip()
+            if reader.metadata.creation_date:
+                try:
+                    published = str(reader.metadata.creation_date.date())
+                except Exception:
+                    published = None
+        pages_text = []
+        for page in reader.pages[:50]:  # safety cap at 50 pages
+            t = page.extract_text() or ""
+            if t.strip():
+                pages_text.append(t.strip())
+        text = "\n\n".join(pages_text)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pdf extraction failed", extra={"url": url, "error": str(exc)})
+    return title, text, published
+
+
+def render_with_playwright(url: str, timeout_seconds: float = 10.0) -> tuple[str | None, str, str | None]:
+    """Fallback headless browser rendering for JavaScript-heavy single-page applications."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.set_default_timeout(int(timeout_seconds * 1000))
+            page.goto(url, wait_until="domcontentloaded")
+            html = page.content()
+            title = page.title()
+            browser.close()
+            _, text, published = extract_html(html, url)
+            return title or None, text, published
+    except Exception as exc:  # noqa: BLE001 - graceful fallback if playwright/browser unavailable
+        log.debug("playwright fallback skipped or unavailable", extra={"url": url, "error": str(exc)})
+        return None, "", None
 
 
 def extract_html(html: str, url: str) -> tuple[str | None, str, str | None]:

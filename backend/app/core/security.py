@@ -8,6 +8,10 @@ import time
 from collections import defaultdict, deque
 from urllib.parse import urlparse
 
+import httpcore
+import httpcore._backends.sync as _sync_backend
+import httpx
+
 BLOCKED_HOST_SUFFIXES = (".local", ".internal", ".localhost", ".lan", ".home", ".corp")
 BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal", "metadata", "instance-data"}
 ALLOWED_SCHEMES = {"http", "https"}
@@ -16,6 +20,71 @@ ALLOWED_PORTS = {None, 80, 443}
 
 class UnsafeURLError(ValueError):
     """Raised when a URL fails SSRF validation."""
+
+
+class SSRFBlockedError(httpcore.ConnectError, UnsafeURLError):
+    """Raised when an active socket connection is attempted to a non-public IP."""
+    pass
+
+
+class SSRFSafeSyncBackend(_sync_backend.SyncBackend):
+    """Network backend that eliminates DNS rebinding / TOCTOU vulnerabilities.
+
+    Resolves the hostname immediately before TCP connection, validates every
+    resolved address against public IP rules, and connects directly to the
+    verified IP address. This guarantees that no secondary DNS lookup occurs
+    between validation and TCP connection establishment.
+    """
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options=None,
+    ):
+        try:
+            ipaddress.ip_address(host)
+            literal_ip = True
+        except ValueError:
+            literal_ip = False
+
+        if literal_ip:
+            if not _ip_is_public(host):
+                raise SSRFBlockedError(f"SSRF blocked: connection to non-public IP {host}")
+            target_ip = host
+        else:
+            try:
+                infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            except socket.gaierror as exc:
+                raise httpcore.ConnectError(f"DNS resolution failed for {host}") from exc
+
+            for info in infos:
+                ip = info[4][0]
+                if not _ip_is_public(ip):
+                    raise SSRFBlockedError(f"SSRF blocked: {host} resolves to non-public IP {ip}")
+
+            target_ip = infos[0][4][0]
+
+        return super().connect_tcp(
+            target_ip,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+
+def create_ssrf_safe_transport(verify: bool = True, retries: int = 0) -> httpx.HTTPTransport:
+    """Create an HTTPX transport with socket-level SSRF defense and IP pinning."""
+    pool = httpcore.ConnectionPool(
+        network_backend=SSRFSafeSyncBackend(),
+        retries=retries,
+    )
+    transport = httpx.HTTPTransport(verify=verify, retries=retries)
+    transport._pool = pool
+    return transport
 
 
 def _ip_is_public(ip: str) -> bool:

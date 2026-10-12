@@ -13,7 +13,7 @@ const FINAL = ["COMPLETED", "PARTIAL", "FAILED"];
 
 export default function RunPage() {
   const { id } = useParams<{ id: string }>();
-  const { data, error, loading } = useApi<RunDetail>(`/runs/${id}`, { pollMs: 800, stopWhen: (d) => FINAL.includes(d.status) });
+  const { data, error, loading } = useApi<RunDetail>(`/runs/${id}`, { pollMs: 2000, stopWhen: (d) => FINAL.includes(d.status) });
   if (loading) return <Loading />;
   if (error || !data) return <ErrorNote>{error ?? "Run not found"}</ErrorNote>;
   const done = FINAL.includes(data.status);

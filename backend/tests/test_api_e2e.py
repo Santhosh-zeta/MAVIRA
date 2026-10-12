@@ -173,6 +173,30 @@ def test_methodology_versioning(client):
     assert client.put("/api/methodology", json={"yaml": m["active"]["yaml"], "note": "restore"}).status_code == 200
 
 
+def test_rbac_methodology_permissions(client):
+    """RBAC prevents analysts and reviewers from modifying methodology YAML."""
+    m = client.get("/api/methodology").json()
+    payload = {"yaml": m["active"]["yaml"], "note": "Unauthorized test"}
+
+    # ANALYST is rejected with 403 Forbidden
+    res_analyst = client.put("/api/methodology", headers={"X-User-Role": "ANALYST"}, json=payload)
+    assert res_analyst.status_code == 403
+    assert "not permitted" in res_analyst.json()["error"]
+
+    # REVIEWER is rejected with 403 Forbidden
+    res_reviewer = client.put("/api/methodology", headers={"X-User-Role": "REVIEWER"}, json=payload)
+    assert res_reviewer.status_code == 403
+
+    # METHODOLOGY_ADMIN is permitted
+    res_admin = client.put("/api/methodology", headers={"X-User-Role": "METHODOLOGY_ADMIN"}, json=payload)
+    assert res_admin.status_code == 200
+
+    # Default headerless (demo / single-analyst mode) is permitted
+    res_default = client.put("/api/methodology", json=payload)
+    assert res_default.status_code == 200
+
+
+
 def test_one_failing_source_does_not_fail_vendor(db, sample_bytes, monkeypatch):
     from app.services.osint.providers import CachedSnapshotProvider, SearchError
     from app.services.runs import create_import, start_run

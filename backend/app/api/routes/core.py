@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import actor, client_key, require_api_key, upload_limiter
+from app.api.deps import actor, client_key, require_api_key, require_role, upload_limiter
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
@@ -277,7 +277,12 @@ class MethodologyUpdate(BaseModel):
 
 
 @router.put("/methodology")
-def update_methodology(req: MethodologyUpdate, db: Session = Depends(get_db), who: str = Depends(actor)):
+def update_methodology(
+    req: MethodologyUpdate,
+    db: Session = Depends(get_db),
+    who: str = Depends(actor),
+    _user=Depends(require_role("METHODOLOGY_ADMIN")),
+):
     try:
         row = register(db, req.yaml, created_by=who, note=req.note)
     except MethodologyError as exc:

@@ -34,7 +34,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(lifespan=lifespan, title="MAVIRA — Meridian AI Vendor Intelligence & Risk Assessment", version="1.0.0",
               docs_url="/api/docs", openapi_url="/api/openapi.json")
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
-                   allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type", "X-API-Key", "X-Analyst"])
+                   allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type", "X-API-Key", "X-Analyst", "X-User-Role"])
 
 
 @app.middleware("http")
