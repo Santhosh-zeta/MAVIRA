@@ -55,6 +55,44 @@ def test_volume_parsing():
     assert parse_largest_quantity("for 38,000 wealth clients") == 38_000
     assert parse_largest_quantity("2.1 million messages") == 2_100_000
     assert parse_largest_quantity("Not applicable") == 0
+    assert parse_largest_quantity("unknown") == 0       # new not_applicable_phrase
+
+
+def test_payment_rail_ds_escalation_fires(methodology):
+    """payment_flow_score_gte=1.0 + data_sensitivity_gte=0.6 -> CRITICAL floor."""
+    row = dict(vendor_ref="V-TEST", name="PayTest", category="Payments Infrastructure",
+               website="test.com", description="", business_process="ACH clearing and settlement",
+               service="Real-time payments clearing and settlement",
+               operational_dependency="Moderate",
+               data_classification="Payment instructions, counterparty names and account identifiers.",
+               data_volume="Not applicable")
+    r = calculate(row, methodology)
+    assert r.tier == "CRITICAL", f"expected CRITICAL, got {r.tier} (score={r.score})"
+    rule_ids = {e["rule"] for e in r.escalations}
+    assert "payment_rail_high_sensitivity" in rule_ids
+
+
+def test_core_banking_high_od_escalation_fires(methodology):
+    """payment_flow_score_gte=0.9 + operational_dependency_gte=0.75 -> CRITICAL floor."""
+    row = dict(vendor_ref="V-TEST2", name="CoreBankTest", category="Core Platform",
+               website="test.com", description="", business_process="Core account processing and servicing",
+               service="Core banking platform and transaction processing",
+               operational_dependency="High",
+               data_classification="No direct customer data.",
+               data_volume="Not applicable")
+    r = calculate(row, methodology)
+    assert r.tier == "CRITICAL", f"expected CRITICAL, got {r.tier}"
+    rule_ids = {e["rule"] for e in r.escalations}
+    assert "core_banking_high_dependency" in rule_ids
+
+
+def test_volume_unknown_scores_zero(methodology):
+    row = dict(vendor_ref="V-TEST3", name="VolTest", category="Other", website="test.com",
+               description="", business_process="", service="",
+               operational_dependency="Low", data_classification="No direct customer data.",
+               data_volume="Unknown")
+    r = calculate(row, methodology)
+    assert r.factors["data_volume"].score == 0.0
 
 
 def test_weights_come_from_configuration(vendor_rows, methodology):
@@ -185,6 +223,36 @@ def test_service_unconfirmed_discount_and_floor(methodology):
     low = risk_calc(_risk(service_confirmed=False, data_sensitivity=0.1, operational_dependency=0.1,
                           regulatory_exposure=0.1, ai_exposure=0.25, ai_types=["NLP"]), methodology)
     assert low.classification == "HIGH" and low.floors          # floor for Critical vendor + confirmed AI
+
+
+def test_critical_floor_fires_on_high_data_sensitivity(methodology):
+    """confirmed_ai_critical_high_data_sensitivity floor -> CRITICAL even if score < 75."""
+    # Use low weights to keep raw score below 75, then check floor raises it
+    r = risk_calc(_risk(data_sensitivity=0.85, operational_dependency=0.25, regulatory_exposure=0.25,
+                        ai_exposure=0.3, ai_types=["NLP"], provider_status="service_linked"), methodology)
+    floor_ids = {f["rule"] for f in r.floors}
+    assert "confirmed_ai_critical_high_data_sensitivity" in floor_ids
+    assert r.classification == "CRITICAL"
+
+
+def test_critical_floor_fires_for_agentic_ai(methodology):
+    """confirmed_ai_critical_agentic floor -> CRITICAL for Agentic AI in Critical vendor."""
+    r = risk_calc(_risk(ai_types=["Agentic AI"], data_sensitivity=0.5,
+                        operational_dependency=0.25, regulatory_exposure=0.25,
+                        ai_exposure=0.3, provider_status="service_linked"), methodology)
+    floor_ids = {f["rule"] for f in r.floors}
+    assert "confirmed_ai_critical_agentic" in floor_ids
+    assert r.classification == "CRITICAL"
+
+
+def test_states_no_training_lowers_training_risk(methodology):
+    with_stmt = risk_calc(_risk(states_no_training=True), methodology)
+    without_stmt = risk_calc(_risk(states_no_training=False), methodology)
+    training_with = next(c for c in with_stmt.categories if c.category == "MODEL_TRAINING_RISK")
+    training_without = next(c for c in without_stmt.categories if c.category == "MODEL_TRAINING_RISK")
+    assert training_with.base < training_without.base
+    assert training_with.status == "ASSESSED"
+    assert training_without.status.startswith("UNKNOWN")
 
 
 # ------------------------------------------------------------------ recommendations

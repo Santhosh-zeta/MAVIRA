@@ -1,0 +1,6 @@
+# Requirements for generating the MAVIRA presentation deck.
+# Run outside the Docker container (host Python only):
+#
+#   pip install -r requirements-deck.txt
+#   python build_deck.py [MAVIRA_Case1_Presentation.pptx]
+python-pptx==1.0.2

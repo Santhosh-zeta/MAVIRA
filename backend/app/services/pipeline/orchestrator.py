@@ -149,6 +149,7 @@ class VendorPipeline:
         self.stage("providers_identified", providers=[p.provider_name for p in providers], status=status)
 
         f = crit.factors
+        states_no_training = _detect_no_training(valid)
         rin = risk_engine.RiskInputs(
             criticality_tier=crit.tier, data_sensitivity=f["data_sensitivity"].score,
             operational_dependency=f["operational_dependency"].score,
@@ -157,6 +158,7 @@ class VendorPipeline:
             provider_status=status, providers=sorted({p.provider_name for p in providers}),
             service_confirmed=any(v.service_specific and v.nature in self.m["ai_classification"]["confirming_natures"]
                                   for v in views),
+            states_no_training=states_no_training,
             evidence_confidence=usage.confidence)
         risk = risk_engine.calculate(rin, self.m)
         a.risk_score, a.risk_class, a.risk_rationale = risk.score, risk.classification, risk.rationale
@@ -389,6 +391,28 @@ class VendorPipeline:
                 "assessment_scope": plan.source_categories, "sources": checked,
                 "sources_without_ai_content": no_ai, "statement": statement,
                 "negative_review_required": plan.negative_evidence_review}
+
+
+import re as _re
+
+_NO_TRAINING_RE = _re.compile(
+    r"(client|customer|user|meridian) data (is not|are not|not) used? (to )?(?:train|fine.?tun|retrain)|"
+    r"(?:not|never|no) (?:train|fine.?tun).+(?:client|customer|user|data)|"
+    r"(?:opt(?:ed)? out|excluded?) from (?:model )?training|"
+    r"data (?:is not|not) (used|shared) (for|to) (?:train|fine.?tun)|"
+    r"prohibit.+training on.+(?:customer|client)|"
+    r"we do not (use|train|utilize).+(?:customer|client).+(?:model|train)",
+    _re.I)
+
+
+def _detect_no_training(evidence: list[Evidence]) -> bool:
+    """Return True when a DIRECT-reliability source contains a credible no-training statement."""
+    for e in evidence:
+        if (e.source.reliability_level == "DIRECT"
+                and e.exact_excerpt
+                and _NO_TRAINING_RE.search(e.exact_excerpt)):
+            return True
+    return False
 
 
 def _parse_dt(v: str | None) -> datetime | None:
