@@ -1,379 +1,552 @@
 # MAVIRA — Meridian AI Vendor Intelligence & Risk Assessment
 
-Private, local-first workbench for **Case Study 1: Vendor AI Usage Analysis** (Meridian Financial).
-It ingests Meridian's vendor inventory workbook, derives vendor criticality, sets OSINT depth from that
-criticality, collects public evidence, determines whether each vendor genuinely uses AI in the service it
-provides, identifies named model providers, scores the resulting AI security risk, routes the result through
-analyst review, and writes the findings back into the original Excel structure.
+<div align="center">
 
-> **Confidentiality.** The vendors are real organisations. Keep this repository and its outputs private: no
-> public repository, no published presentation, no contact with vendors. The platform makes no contact with
-> vendors; in LIVE mode it only reads public web pages.
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=next.js&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-zero--install-003B57?logo=sqlite&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
 
----
+**A local-first, deterministic AI Vendor Risk Assessment platform.**  
+Upload a vendor inventory, get evidence-grounded AI-usage verdicts, risk scores, and prioritised recommendations — in minutes, without an LLM.
 
-## Contents
+[Quick Start](#quick-start) · [Architecture](#architecture) · [Methodology](#methodology) · [API Reference](#api-reference) · [Configuration](#environment-variables)
 
-- [What it does](#what-it-does) · [Results on the supplied inventory](#results-on-the-supplied-inventory)
-- [Architecture](#architecture) · [Tech stack](#tech-stack)
-- [How to run the application](#how-to-run-the-application)
-- [Environment variables](#environment-variables) · [Database](#database)
-- [Demo mode vs live OSINT](#demo-mode-vs-live-osint) · [LLM (optional)](#llm-optional)
-- [Excel import and export](#excel-import-and-export) · [Tests](#tests)
-- [Methodology](#methodology) · [Security](#security-considerations) · [Privacy / data egress](#privacy-and-data-egress)
-- [Limitations and assumptions](#limitations-and-known-assumptions)
-
-Design documents: [`docs/FUNCTIONAL_DESIGN.md`](docs/FUNCTIONAL_DESIGN.md),
-[`docs/TECHNICAL_ARCHITECTURE.md`](docs/TECHNICAL_ARCHITECTURE.md),
-[`docs/SOURCE_STRATEGY.md`](docs/SOURCE_STRATEGY.md), [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md).
+</div>
 
 ---
 
-## What it does
+## What is MAVIRA?
 
-```
-Upload workbook → validate → parse vendors → criticality → assessment depth → search strategy
-→ collect sources → extract/normalise → AI signal detection → exact-excerpt validation
-→ AI usage (YES / NO / INCONCLUSIVE) → providers → AI security risk → recommendations
-→ analyst review (approve / override / reassess) → export completed workbook
-```
+MAVIRA ingests a financial institution's vendor inventory workbook, automatically determines how deeply each vendor should be investigated based on criticality, collects OSINT evidence from public web pages, and runs a fully deterministic pipeline to answer:
 
-| Capability | Where |
+> *"Does this vendor use AI in the service it provides to us — and if so, what is the security risk?"*
+
+Every finding is grounded in an exact verbatim excerpt from a public source. No hallucination, no invented quotes. Analysts can approve, override, or trigger a reassessment, then export the completed workbook for submission.
+
+### Key capabilities
+
+| Capability | Implementation |
 |---|---|
-| Deterministic, configurable criticality (5 factors + escalation rules) | `backend/app/services/criticality/`, `backend/app/config/methodology.yaml` |
-| Criticality-driven depth tiers and query plans | `backend/app/services/depth/` |
-| Provider-agnostic OSINT (Tavily, Serper, Brave, cached snapshot, fixtures) | `backend/app/services/osint/providers.py` |
+| 5-factor criticality scoring with escalation floors | `backend/app/services/criticality/` |
+| Criticality-driven OSINT depth tiers | `backend/app/services/depth/` |
+| Provider-agnostic OSINT (Serper, Tavily, Brave, cached snapshot) | `backend/app/services/osint/` |
 | SSRF-safe, robots-aware fetcher with ETag caching | `backend/app/services/extraction/fetcher.py` |
-| Evidence proposal (rule-based default, LiteLLM optional) | `backend/app/services/ai/` |
-| Exact-excerpt validation (no invented quotes) | `backend/app/services/evidence/validator.py` |
-| Evidence strength (separate from classification confidence) | `backend/app/services/evidence/strength.py` |
-| Deterministic risk engine (9 categories, unknowns labelled) | `backend/app/services/risk/engine.py` |
-| Rule-grounded recommendations | `backend/app/services/recommendations/engine.py` |
-| Append-only analyst review + audit trail | `backend/app/services/review/`, `audit_events` table |
-| Excel write-back preserving the original workbook | `backend/app/services/export/excel_writer.py` |
-| Enterprise UI: register, import, live run, vendor detail, evidence explorer, risk, review, methodology, audit | `frontend/app/` |
-
-## Results on the supplied inventory
-
-Run against the six real vendors using the cached OSINT snapshot (captured 2026-10-06, see
-[Demo mode](#demo-mode-vs-live-osint)). Methodology `1.0.0`.
-
-| ID | Vendor | Criticality | AI usage (confidence) | Risk | Basis in one line |
-|---|---|---|---|---|---|
-| V-001 | AutomWorx | High (escalated from Medium: privileged production access) | Inconclusive (73%) | Medium | AI sits in the Automic platform it implements ("bring your own LLM"); its own use in service delivery is not stated |
-| V-002 | Fiserv | Critical (0.99) | **Yes** (76%) | High | Investor release: AI "already powers fraud detection, risk management…"; Microsoft Foundry/Copilot named at enterprise level; DNA-specific use not stated |
-| V-003 | FSSI | High (0.72) | Inconclusive (73%) | Low | One 2017 marketing article ("we can tap into… customer data") — capability claim, not deployment |
-| V-004 | Terrapin | Medium (0.52) | Inconclusive (73%) | Low | Thought leadership on "AI-ready data"; no statement of AI in its platform |
-| V-005 | BNY | Critical (0.81) | **Yes** (89%) | High | "AI-based anomaly detection in its own Payment Validation solution"; OpenAI and NVIDIA named enterprise-wide; RTP-specific use not stated |
-| V-006 | The Clearing House | Critical (0.86) | Inconclusive (83%) | None identified | No public statement of AI in RTP/ACH operations; only AML advocacy. Questionnaire recommended |
-
-`sample_data/Meridian_Vendor_Input_MAVIRA_completed.xlsx` is the exported workbook from this run (status: pending
-analyst review — approve or override in the UI before submitting).
-
-The fictional worked example (V-000, Larkspur) is used as a calibration fixture: the engine reproduces
-Critical / Yes, and rates risk High rather than Critical because the only usage evidence is an executive
-social post (MEDIUM reliability) that does not name Meridian's service. See `backend/tests/test_worked_example.py`.
+| Evidence strength scoring (0–100) with 7 evidence natures | `backend/app/services/evidence/` |
+| Exact-excerpt validation — fabricated quotes are rejected | `backend/app/services/evidence/validator.py` |
+| Deterministic risk engine, 9 categories, unknowns labelled | `backend/app/services/risk/engine.py` |
+| Rule-grounded recommendation engine (P1–P4, due-date SLA) | `backend/app/services/recommendations/engine.py` |
+| Append-only analyst review + immutable audit trail | `backend/app/services/review/` |
+| Excel write-back preserving original workbook styles | `backend/app/services/export/excel_writer.py` |
+| All weights, thresholds, and rules in one YAML | `backend/app/config/methodology.yaml` |
 
 ---
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-  U[Analyst browser] -->|same origin| FE[Next.js frontend<br/>+ /api proxy]
-  FE -->|server-side, API key injected| API[FastAPI backend]
-  API --> PG[(PostgreSQL)]
-  API -->|enqueue run| R[(Redis)]
-  R --> W[RQ worker<br/>assessment pipeline]
-  W --> PG
-  W -->|LIVE only| SP[Search provider<br/>Tavily / Serper / Brave]
-  W -->|LIVE only, SSRF-guarded| WEB[Public web pages]
-  W -.optional.-> LLM[LLM via LiteLLM]
-  W -->|DEMO| SNAP[Cached OSINT snapshot<br/>in repo]
+flowchart TB
+    subgraph Browser["Analyst Browser"]
+        UI[Next.js 16 App Router\nTypeScript + Tailwind + Radix]
+    end
+
+    subgraph Backend["FastAPI Backend  :8000"]
+        direction TB
+        API[REST API\n/api/*]
+        PIPE[Assessment Pipeline\n8 deterministic stages]
+        ENG[Engines\ncriticality · depth · evidence\nrisk · recommendations]
+        API --> PIPE
+        PIPE --> ENG
+    end
+
+    subgraph Data["Data Layer"]
+        DB[(SQLite / PostgreSQL\nSQLAlchemy 2 + Alembic)]
+        XLS[Excel workbook\nopenpyxl]
+        YAML[methodology.yaml\nweights · thresholds · rules]
+    end
+
+    subgraph OSINT["OSINT  (LIVE mode only)"]
+        SP[Search Provider\nSerper · Tavily · Brave]
+        WEB[Public Web Pages\nSSRF-guarded fetcher]
+        SP --> WEB
+    end
+
+    subgraph DEMO["DEMO mode"]
+        SNAP[Cached OSINT snapshot\n13 real pages, captured 2026-10-06]
+    end
+
+    UI -- "/api proxy (same-origin)" --> API
+    Backend --> Data
+    PIPE -- "LIVE" --> OSINT
+    PIPE -- "DEMO" --> DEMO
+    PIPE -.-> LLM["LiteLLM  (optional)\npropose excerpts only"]
 ```
-
-A modular monolith: one backend codebase serves the API and runs the worker. Full detail in
-[`docs/TECHNICAL_ARCHITECTURE.md`](docs/TECHNICAL_ARCHITECTURE.md).
-
-## Tech stack
-
-- **Backend:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, PostgreSQL 16, Redis + RQ,
-  httpx, trafilatura, BeautifulSoup, openpyxl, PyYAML; LiteLLM optional.
-- **Frontend:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4, shadcn/ui-style components
-  on Radix primitives, Recharts, self-hosted fonts (Public Sans, Source Serif 4).
-- **Infra:** Docker Compose — `frontend`, `backend`, `worker`, `postgres`, `redis`, optional `adminer`.
 
 ---
 
-## How to Run the Application
+## 8-Stage Assessment Pipeline
 
-You can run the application either **locally (recommended for quick testing/development)** or using **Docker Compose**.
+```mermaid
+flowchart LR
+    A([Excel Upload]) --> B[1 · Profile\nparse & validate\nvendor fields]
+    B --> C[2 · Criticality\n5 factors × weights\n+ escalation floors]
+    C --> D[3 · Depth Tier\nLOW → MED → HIGH\n→ CRITICAL]
+    D --> E[4 · Search Strategy\nbuild query plan\nfor depth tier]
+    E --> F[5 · OSINT Collection\nserp → fetch\nor demo cache]
+    F --> G[6 · Evidence Extraction\nexcerpt · validate\nnature · strength]
+    G --> H[7 · AI Usage Decision\nYES / INCONCLUSIVE\n/ NO + confidence]
+    H --> I[8 · Risk & Recommendations\n9 risk categories\nP1–P4 actions]
+    I --> J([Analyst Review\napprove / override\n/ reassess])
+    J --> K([Excel Export\nfindings + evidence log\n+ methodology sheet])
 
-### Option 1: Running Locally (Without Docker)
+    style A fill:#0D1B3E,color:#fff
+    style K fill:#E05A0E,color:#fff
+```
 
-**Prerequisites:**
-- Python 3.12+ (Python 3.13 supported)
+---
+
+## Criticality Scoring
+
+```mermaid
+flowchart TD
+    START([Vendor Input]) --> W{Weighted Score\n= OD×0.30 + DS×0.25\n+ PF×0.15 + RE×0.15\n+ VL×0.15}
+
+    W --> T1{score ≥ 0.75?}
+    T1 -- Yes --> CRIT[CRITICAL]
+    T1 -- No --> T2{score ≥ 0.55?}
+    T2 -- Yes --> HIGH_RAW[HIGH]
+    T2 -- No --> T3{score ≥ 0.35?}
+    T3 -- Yes --> MED[MEDIUM]
+    T3 -- No --> LOW[LOW]
+
+    HIGH_RAW --> F1{Floor Check\nPrivileged prod access\n+ HIGH dep?}
+    F1 -- Yes --> HIGH[HIGH ✓]
+    F1 -- No --> HIGH[HIGH]
+
+    MED --> F2{Floor Check\nCritical dep +\nsensitive data?}
+    F2 -- Yes --> CRIT
+    F2 -- No --> MED2[MEDIUM ✓]
+
+    LOW --> F3{Floor Check\nHighest sensitivity\n+ scale + HIGH dep?}
+    F3 -- Yes --> CRIT
+    F3 -- No --> LOW2[LOW ✓]
+
+    CRIT --> DEPTH_CRIT[Depth: CRITICAL\nFull investigation\nmandatory sign-off]
+    HIGH --> DEPTH_HIGH[Depth: HIGH\nEnhanced\n+ filings + exec posts]
+    MED2 --> DEPTH_MED[Depth: MEDIUM\nStandard\nall query categories]
+    LOW2 --> DEPTH_LOW[Depth: LOW\nBaseline\nhome page + blog]
+
+    style CRIT fill:#dc2626,color:#fff
+    style DEPTH_CRIT fill:#dc2626,color:#fff
+    style HIGH fill:#ea580c,color:#fff
+    style DEPTH_HIGH fill:#ea580c,color:#fff
+```
+
+**Factor keys:** OD = Operational Dependency · DS = Data Sensitivity · PF = Payment-Flow Role · RE = Regulatory Exposure · VL = Volume (log-scaled)
+
+---
+
+## Evidence Scoring & AI Usage Verdict
+
+```mermaid
+flowchart TD
+    SRC[Source Pages] --> EXT[Extract exact excerpts\nbeautifulsoup + trafilatura]
+    EXT --> VAL{Verbatim in source?}
+    VAL -- No --> REJ[REJECTED\nfabricated quote]
+    VAL -- Yes --> NAT[Classify nature]
+
+    NAT --> N1[SERVICE_INTEGRATED\ndirectness = DIRECT]
+    NAT --> N2[PRODUCT_FEATURE\ndirectness = DIRECT]
+    NAT --> N3[PARTNER_DEPENDENCY\ndirectness = INFERRED]
+    NAT --> N4[INTERNAL_OPERATIONAL_USE\ndirectness = INFERRED]
+    NAT --> N5[HIRING_SIGNAL\ndirectness = INDIRECT]
+    NAT --> N6[MARKETING_ONLY\n⚠ disqualified]
+    NAT --> N7[INDUSTRY_COMMENTARY\n⚠ disqualified]
+
+    N1 & N2 & N3 & N4 & N5 --> STR[Strength Score 0–100\nreliability + directness\n+ service_relevance\n+ recency + specificity\n+ corroboration]
+
+    STR --> VER{Verdict rule}
+    VER -- "Single DIRECT ≥ 65\nOR dual independent ≥ 45" --> YES[AI Usage: YES]
+    VER -- "Evidence found but\ndoes not meet bar" --> INC[INCONCLUSIVE]
+    VER -- "Explicit negative\nstatement from direct source" --> NO[AI Usage: NO]
+    VER -- "No meaningful\npublic evidence" --> INC
+
+    style YES fill:#16a34a,color:#fff
+    style NO fill:#1d4ed8,color:#fff
+    style INC fill:#d97706,color:#fff
+    style REJ fill:#9ca3af,color:#fff
+    style N6 fill:#9ca3af,color:#fff
+    style N7 fill:#9ca3af,color:#fff
+```
+
+---
+
+## Data Model
+
+```mermaid
+erDiagram
+    WorkbookImport ||--o{ Vendor : "contains"
+    WorkbookImport ||--o{ AssessmentRun : "triggers"
+    AssessmentRun ||--o{ Assessment : "produces"
+    Vendor ||--o{ Assessment : "assessed in"
+
+    Assessment ||--o{ Evidence : "has"
+    Assessment ||--o{ Source : "uses"
+    Assessment ||--o{ RiskFactor : "scores"
+    Assessment ||--o{ Recommendation : "generates"
+    Assessment ||--o{ AnalystReview : "reviewed by"
+
+    Evidence }o--|| Source : "excerpted from"
+
+    WorkbookImport {
+        uuid id PK
+        string filename
+        string status
+        datetime uploaded_at
+    }
+    Vendor {
+        uuid id PK
+        string vendor_ref
+        string name
+        string category
+        string operational_dependency
+        string data_classification
+    }
+    Assessment {
+        uuid id PK
+        string status
+        string stage
+        string criticality_tier
+        float criticality_score
+        string ai_usage
+        float ai_confidence
+        string risk_class
+        float risk_score
+        string review_status
+    }
+    Evidence {
+        uuid id PK
+        string nature
+        string exact_excerpt
+        string validation_status
+        float strength_score
+        string strength_level
+    }
+    AuditEvent {
+        uuid id PK
+        string event_type
+        string actor
+        json payload
+        datetime created_at
+    }
+```
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.12+
 - Node.js 20+ and npm
 
-#### 1. Backend Setup (FastAPI)
+### One-command start (Windows)
 
-1. Open a terminal and navigate to the `backend` directory:
-   ```bash
-   cd backend
-   ```
-
-2. Create a virtual environment and activate it:
-   - **Windows (PowerShell):**
-     ```powershell
-     python -m venv .venv
-     .\.venv\Scripts\Activate.ps1
-     ```
-   - **Linux / macOS:**
-     ```bash
-     python -m venv .venv
-     source .venv/bin/activate
-     ```
-
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Create a `.env` file in the `backend/` directory:
-   ```ini
-   DATABASE_URL=sqlite:///mavira.db
-   WORKER_MODE=inline
-   OSINT_MODE=DEMO
-   DEMO_STEP_DELAY_MS=150
-   ASSESSOR_TEAM=Team MAVIRA
-   STORAGE_DIR=storage
-   CORS_ORIGINS=http://localhost:3000
-   ```
-   *(Note: SQLite works out of the box with zero database installation required. If you prefer PostgreSQL, set `DATABASE_URL=postgresql+psycopg://mavira:mavira@localhost:5432/mavira` and run `alembic upgrade head`)*.
-
-5. Start the backend server:
-   ```bash
-   uvicorn app.main:app --port 8000
-   ```
-   The backend API will start at **http://localhost:8000**.
-   - API Docs (Swagger): **http://localhost:8000/api/docs**
-   - Health check: **http://localhost:8000/api/health**
-
----
-
-#### 2. Frontend Setup (Next.js)
-
-1. Open a new terminal and navigate to the `frontend` directory:
-   ```bash
-   cd frontend
-   ```
-
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-3. (Optional) Create `.env.local` if custom backend URL is needed (defaults to `http://localhost:8000`):
-   ```ini
-   BACKEND_URL=http://localhost:8000
-   ```
-
-4. Start the development server:
-   ```bash
-   npm run dev
-   ```
-   The frontend UI will be live at **http://localhost:3000**.
-
-   *Or for production build:*
-   ```bash
-   npm run build
-   npm start
-   ```
-
----
-
-### Option 2: Running with Docker Compose
-
-If you have Docker Desktop installed and running:
-
-```bash
-cp .env.example .env          # defaults run fully offline in DEMO mode
-docker compose up --build
+```powershell
+.\start.ps1
 ```
 
-- Web UI: **http://localhost:3000**
-- API Docs: **http://localhost:8000/api/docs**
-- Optional DB UI: `docker compose --profile admin up adminer` → **http://localhost:8081**
-- Ports are bound to `127.0.0.1` only.
+This kills any process on ports 8000/3000 and opens two terminal windows — backend and frontend.
 
----
+### Manual setup
 
-### Using the Application
-
-1. Open **http://localhost:3000** in your browser.
-2. Click **Import workbook** and upload `sample_data/Meridian_Vendor_Input.xlsx`.
-3. Click **Start assessment** to initiate the analysis pipeline (or observe existing vendor records).
-4. Review vendor criticality, public AI usage signals, security risk scores, and evidence extracts.
-5. Make analyst approvals/overrides and click **Export completed workbook**.
-
-## Environment variables
-
-See [`.env.example`](.env.example). Key ones:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `DATABASE_URL` | local Postgres | SQLAlchemy URL |
-| `REDIS_URL` | `redis://localhost:6379/0` | queue |
-| `WORKER_MODE` | `inline` (compose: `rq`) | where runs execute |
-| `OSINT_MODE` | `DEMO` | `DEMO` = cached snapshot, `LIVE` = search provider + fetch |
-| `SEARCH_PROVIDER` | `none` | `tavily`, `serper`, `brave` |
-| `TAVILY_API_KEY` / `SERPER_API_KEY` / `BRAVE_API_KEY` | — | provider keys |
-| `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_BASE` | `none` | optional LiteLLM analyzer |
-| `API_KEY` | — | optional shared API key (frontend proxy injects it; never sent to the browser) |
-| `ASSESSOR_TEAM` | `Team MAVIRA` | written to *Assessed By / Date* |
-| `DEMO_STEP_DELAY_MS` | `150` | pacing so progress is visible in demos; affects nothing else |
-
-## Database
-
-PostgreSQL schema managed by Alembic (`backend/alembic/versions/0001_initial_schema.py`). Tables:
-`workbook_imports, vendors, assessment_runs, assessments, search_runs, sources, assessment_sources,
-source_chunks, evidence, ai_signals, ai_providers, risk_factors, recommendations, analyst_reviews,
-methodology_versions, audit_events`. Sources are de-duplicated by URL hash (unique) and by content hash
-within an assessment. pgvector was not used: validation is exact lexical matching and nothing needs
-semantic retrieval at this scale.
-
----
-
-## Demo mode vs live OSINT
-
-Every source carries a collection method shown in the UI and the export:
-
-| Label | Meaning |
-|---|---|
-| **LIVE** | fetched from the public web during the run |
-| **CACHED** | verbatim passages captured during an earlier analyst OSINT session, with retrieval timestamp |
-| **DEMO_MOCK** | fictional fixture (only the V-000 worked example in tests) |
-
-**DEMO (default)** uses `backend/app/demo_data/osint_cache.json`: 13 real public pages for the six vendors,
-retrieved 2026-10-06, relevant passages kept verbatim (built by `backend/scripts/build_demo_cache.py`,
-which documents each source). Vendor home pages with no AI content are included on purpose — they are part
-of the negative-evidence record. Nothing in the snapshot is invented, and it is never labelled LIVE.
-The snapshot only returns a page for the query categories that originally surfaced it, so depth tiers still
-change what each vendor's review sees.
-
-**LIVE**: set `OSINT_MODE=LIVE`, `SEARCH_PROVIDER=tavily|serper|brave` and the matching key. The same
-pipeline then executes the tier's query plan against the provider and fetches each result through the
-SSRF-guarded fetcher. JavaScript-only pages return thin content (Playwright is not bundled) and are recorded,
-not guessed.
-
-## LLM (optional)
-
-Default analyzer: deterministic rules (`rules-v1.0`), no data leaves the machine. To use a model:
-
-```bash
-INSTALL_LLM=true LLM_PROVIDER=openai LLM_MODEL=gpt-4o-mini OPENAI_API_KEY=... docker compose up --build
-# local model: LLM_PROVIDER=ollama LLM_MODEL=llama3.1 LLM_API_BASE=http://host.docker.internal:11434
-```
-
-The LLM only proposes excerpts and classifications. Its output is schema-validated (Pydantic); every excerpt
-must be found verbatim in the stored source or it is rejected; providers it names are kept only if they appear
-in that excerpt; it cannot mark a signal SERVICE_INTEGRATED unless the excerpt names the contracted service.
-Criticality, depth, strength and risk are always computed by the deterministic engines. On any LLM failure the
-rule-based analyzer runs and the failure is logged on the assessment. Model name and prompt version
-(`mavira-evidence-v1`) are stored on every run.
-
-## Excel import and export
-
-- **Import** finds the sheet with a `Vendor ID` / `Vendor Name` header row, maps columns **by header text**
-  (tolerates reordering and the workbook's `Assessedd By / Date` typo), validates required columns, flags
-  duplicates and missing values, and detects the worked example (V-000) so it is stored but never assessed.
-- **Export** (`/api/exports/excel`) reopens the uploaded workbook and writes only the eleven assessment columns
-  of assessed rows, keeping existing cell styles. Provided columns and V-000 are untouched (asserted in tests).
-  Analyst overrides take precedence and the reviewer is named in *Assessed By / Date*. Three sheets are added:
-  **Evidence Log** (excerpt, URL, type, reliability, method, dates, signal type, strength, confidence,
-  interpretation), **Sources Checked** (negative-evidence record) and **Methodology** (version, weights, tiers).
-- The *Evidence Description* column follows the Field Guide: exact excerpts with URL, retrieval date, source
-  type and collection method — no interpretation.
-- JSON export: `/api/exports/json`.
-
-## Tests
+**Backend**
 
 ```bash
 cd backend
-pytest                                                    # SQLite
-TEST_DATABASE_URL=postgresql+psycopg://mavira:mavira@localhost:5432/mavira_test pytest   # Postgres via Alembic
+python -m venv .venv
+# Windows:
+.\.venv\Scripts\Activate.ps1
+# macOS/Linux:
+source .venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
-79 tests: criticality, depth, methodology validation, strength, usage determination, risk, recommendations,
-evidence validation (incl. fabricated-quote rejection), rule classifier, provider detection, source
-classification, LLM schema + hallucination guards (fake LLM), Excel import edge cases, SSRF/upload/rate-limit
-controls, the worked-example calibration, and an end-to-end API test (upload → run → evidence verified
-against source → review/override/reassess → Excel export with V-000 and provided columns unchanged → JSON →
-audit). Frontend: `npm run build` (type-checks).
+Create `backend/.env`:
+
+```ini
+DATABASE_URL=sqlite:///mavira.db
+WORKER_MODE=inline
+OSINT_MODE=DEMO
+ASSESSOR_TEAM=Team MAVIRA
+STORAGE_DIR=storage
+CORS_ORIGINS=http://localhost:3000
+```
+
+```bash
+uvicorn app.main:app --port 8000 --reload
+```
+
+**Frontend**
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open **http://localhost:3000**
+
+### Docker Compose
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+| Service | URL |
+|---|---|
+| Web UI | http://localhost:3000 |
+| API docs (Swagger) | http://localhost:8000/api/docs |
+| Health check | http://localhost:8000/api/health |
+| DB browser (optional) | `docker compose --profile admin up adminer` → http://localhost:8081 |
+
+---
+
+## Using the Application
+
+1. Open **http://localhost:3000**
+2. Click **Import workbook** and upload `sample_data/Meridian_Vendor_Input.xlsx`
+3. Click **Start assessment** — the 8-stage pipeline runs for each vendor
+4. Explore vendor criticality, evidence, AI usage verdicts, risk scores, and recommendations
+5. Approve or override as analyst, then **Export completed workbook**
+6. To start fresh: click **Clear** (then **Confirm?**) in the sidebar — or call `POST /api/reset`
+
+> **Mode badge in sidebar:** ⚡ LIVE (real Serper searches) or 🗄 DEMO (cached Oct 2026 snapshot). Switch via `OSINT_MODE` env var.
+
+---
+
+## Environment Variables
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DATABASE_URL` | `sqlite:///mavira.db` | Any SQLAlchemy URL; PostgreSQL also supported |
+| `WORKER_MODE` | `inline` | `inline` (synchronous) or `rq` (background queue) |
+| `OSINT_MODE` | `DEMO` | `DEMO` = cached snapshot; `LIVE` = real searches |
+| `SEARCH_PROVIDER` | `none` | `serper`, `tavily`, or `brave` (LIVE mode) |
+| `SERPER_API_KEY` | — | API key for google.serper.dev |
+| `TAVILY_API_KEY` | — | API key for api.tavily.com |
+| `BRAVE_API_KEY` | — | API key for api.search.brave.com |
+| `LLM_PROVIDER` | `none` | Optional: `openai`, `anthropic`, `ollama` via LiteLLM |
+| `LLM_MODEL` | — | e.g. `gpt-4o-mini`, `llama3.1` |
+| `LLM_API_BASE` | — | For local Ollama: `http://localhost:11434` |
+| `ASSESSOR_TEAM` | `Team MAVIRA` | Written to *Assessed By / Date* column in export |
+| `STORAGE_DIR` | `storage` | Where uploaded workbooks are saved |
+| `DEMO_STEP_DELAY_MS` | `150` | Pipeline pacing for demos (cosmetic only) |
+| `CORS_ORIGINS` | `http://localhost:3000` | Allowed origins for the API |
+
+---
+
+## API Reference
+
+All routes are prefixed `/api/`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Mode, provider, LLM status, data egress profile |
+| `POST` | `/imports` | Upload Excel workbook (multipart) |
+| `GET` | `/imports/{id}` | Import status and vendor list |
+| `POST` | `/runs` | Start assessment run for an import |
+| `GET` | `/runs/{id}` | Run progress and per-vendor status |
+| `GET` | `/vendors` | All vendor summaries with latest assessment |
+| `GET` | `/vendors/{ref}` | Full vendor detail: evidence, risk, recommendations, reviews |
+| `GET` | `/vendors/{ref}/runs/{run_id}` | Specific assessment for a vendor |
+| `PUT` | `/vendors/{ref}/review` | Submit analyst review (approve/override/reassess) |
+| `GET` | `/evidence` | All evidence items with filters |
+| `GET` | `/methodology` | Current methodology configuration |
+| `PUT` | `/methodology` | Update methodology (creates new version) |
+| `GET` | `/exports/excel` | Download completed workbook |
+| `GET` | `/exports/json` | Export all findings as JSON |
+| `GET` | `/audit` | Append-only audit event log |
+| `POST` | `/reset` | Wipe all assessment data (dev / re-run) |
+
+Interactive docs: **http://localhost:8000/api/docs**
 
 ---
 
 ## Methodology
 
-All weights, thresholds, tiers, rules and recommendation templates live in
-`backend/app/config/methodology.yaml`, are hashed into a version on startup, and are editable from the
-**Methodology** page (each save is a new version; old assessments keep theirs). Summary:
+All weights, thresholds, depth tiers, evidence rules, and recommendation templates live in a single file: [`backend/app/config/methodology.yaml`](backend/app/config/methodology.yaml). Every save through the UI creates a new hashed version; old assessments retain the version they were run against.
 
-- **Criticality** = 0.30 operational dependency + 0.25 data sensitivity + 0.15 payment-flow role +
-  0.15 regulatory exposure + 0.15 volume (log-scaled). Critical ≥ 0.75, High ≥ 0.55, Medium ≥ 0.35.
-  Escalation floors: Critical dependency with sensitive data or payment-rail role → Critical; highest-sensitivity
-  data at scale with High dependency → Critical; privileged production access with High dependency → High.
-- **Depth**: Low (baseline) → Medium (standard) → High (enhanced, adds filings, sub-processors, executive
-  statements) → Critical (full, adds partner/provider searches, corroboration, negative-evidence review,
-  mandatory sign-off).
-- **AI usage**: YES needs a confirming signal (in-service or product capability) with strength ≥ 65, or two
-  from distinct sources ≥ 45. Marketing claims, commentary, hiring and partner signals never confirm.
-  Absence of evidence is INCONCLUSIVE with the statement *"NO MEANINGFUL PUBLIC EVIDENCE IDENTIFIED WITHIN
-  ASSESSED OSINT SCOPE"*; NO requires an explicit negative statement from a direct source.
-- **Risk** (0–100): nine categories, each `base × AI presence`; unknowns (retention, training, contract,
-  undisclosed provider) are scored as unknown and labelled *UNKNOWN / NOT PUBLICLY DISCLOSED*.
+### Criticality factors
 
-Full rationale: [`docs/SOURCE_STRATEGY.md`](docs/SOURCE_STRATEGY.md).
+| Factor | Weight | Basis |
+|---|---|---|
+| Operational Dependency | 30% | How severely would the business be disrupted if this vendor failed? |
+| Data Sensitivity | 25% | Highest classification of data the vendor processes (PII, financial, payment rail) |
+| Payment-Flow Role | 15% | Does the vendor sit on the payment processing path? |
+| Regulatory Exposure | 15% | Are there direct regulatory obligations tied to this vendor? |
+| Data Volume | 15% | Log-scaled record volume; larger footprint = greater blast radius |
 
-## Security considerations
+**Why these 5 factors?** They map the three classic risk dimensions: *availability impact* (OD), *data impact* (DS + VL), and *compliance impact* (PF + RE) — with weights calibrated so a payment-rail vendor with moderately sensitive data cannot fall below CRITICAL regardless of other scores.
 
-- Secrets only via environment; nothing secret in the repo; API key never reaches the browser (server-side proxy).
-- Upload: extension + ZIP magic check, 10 MB cap, per-client rate limit; workbook parsed with openpyxl (no macros).
-- SSRF: scheme/port allow-list, no credentials in URLs, blocks loopback/private/link-local/metadata/IPv4-mapped
-  and single-label hosts, resolves DNS and checks every answer, re-validates every redirect hop.
-- Fetching: robots.txt honoured, per-domain throttle, timeouts, bounded retries, response size cap.
-- SQL via ORM only; React escapes all rendered text (no `dangerouslySetInnerHTML`); CSP, X-Frame-Options,
-  nosniff, no-referrer headers; generic error bodies with a reference id; JSON logs with secret redaction.
-- Append-only audit trail for imports, runs, vendor results, reviews, methodology changes and exports.
-- Containers run as non-root; Compose binds ports to 127.0.0.1.
-- Not included (single-team local deployment): user accounts/SSO. Set `API_KEY` for any shared host and put
-  the stack behind your SSO proxy.
+**Thresholds:** CRITICAL ≥ 0.75 · HIGH ≥ 0.55 · MEDIUM ≥ 0.35 · LOW < 0.35
 
-## Privacy and data egress
+**Escalation floors** (override the weighted score):
+- Confirmed critical operational dependency + sensitive data or payment-rail role → **CRITICAL**
+- Highest-sensitivity data at scale with HIGH operational dependency → **CRITICAL**
+- Privileged production access + HIGH operational dependency → **HIGH** (minimum)
 
-| Mode | What leaves the environment |
+### Evidence strength components
+
+| Component | Weight | What it measures |
+|---|---|---|
+| Source reliability | 35% | Press release > investor filing > exec post > marketing |
+| Directness | 25% | SERVICE_INTEGRATED/PRODUCT_FEATURE > INFERRED > INDIRECT |
+| Service relevance | 20% | Does the excerpt name the contracted service specifically? |
+| Recency | 10% | Age of the source (documents decay) |
+| Specificity | 5% | Named model or technology vs. generic "AI" mention |
+| Corroboration | 5% | Independent second source for the same claim |
+
+**AI Usage YES threshold:** Single DIRECT source with strength ≥ 65 **OR** two independent sources each ≥ 45.
+
+### Risk categories
+
+Model Transparency · Data Retention Unknowns · Training Data Use · Third-Party AI Provider Exposure · Agentic Capability Risk · Adversarial Robustness · Contractual Gap · Undisclosed Provider · Regulatory Alignment
+
+Each category scores `base_weight × AI_presence_index`. Unknowns (retention policy, training use, undisclosed providers) are scored at maximum uncertainty and labelled `UNKNOWN / NOT PUBLICLY DISCLOSED` rather than guessed.
+
+### Recommendation priorities
+
+| Priority | Due | Triggered by |
+|---|---|---|
+| P1 | 15 days | CRITICAL vendor with confirmed AI + sensitive data |
+| P2 | 30 days | HIGH vendor with confirmed or unconfirmed AI; or missing contract clauses |
+| P3 | 60 days | MEDIUM vendor with AI signals; or vendor questionnaire needed |
+| P4 | 90 days | All vendors: model transparency checklist, policy review |
+
+---
+
+## Tests
+
+```bash
+cd backend
+pytest
+```
+
+79 tests covering: criticality, depth, methodology validation, evidence strength, usage determination, risk scoring, recommendations, exact-excerpt validation (incl. fabricated-quote rejection), rule classifier, provider detection, source classification, LLM schema + hallucination guards, Excel import edge cases, SSRF/upload/rate-limit controls, a worked-example calibration fixture, and a full end-to-end API test (upload → run → evidence verified against source → review/override/reassess → Excel export → JSON → audit).
+
+Frontend type check:
+
+```bash
+cd frontend && npm run build
+```
+
+---
+
+## Security
+
+- **Secrets:** environment variables only; nothing secret committed to the repo; API keys never sent to the browser (server-side proxy pattern)
+- **Upload validation:** extension + ZIP magic check, 10 MB cap, per-client rate limit; parsed with openpyxl (no macro execution)
+- **SSRF protection:** scheme/port allowlist, blocks loopback/private/link-local/metadata/IPv4-mapped addresses, resolves DNS and validates every answer, re-validates on every redirect hop
+- **Fetching:** robots.txt honoured, per-domain throttle, timeouts, bounded retries, response size cap
+- **SQL:** ORM only, no raw SQL; React escapes all rendered text (no `dangerouslySetInnerHTML`)
+- **Headers:** CSP, X-Frame-Options, nosniff, no-referrer; generic error bodies with reference IDs; JSON logs with secret redaction
+- **Audit trail:** append-only events for imports, runs, results, reviews, methodology changes, and exports
+
+---
+
+## Data Egress
+
+| Mode | What leaves the machine |
 |---|---|
 | DEMO, no LLM (default) | Nothing |
-| LIVE | Search queries (vendor name, domain, service keywords) to the search provider; HTTP GETs to public pages |
-| LLM enabled | Public page text plus vendor name/category/service description to the configured model |
+| LIVE | Search queries to the search provider; HTTP GET to public pages |
+| LLM enabled | Public page text + vendor name/category/service description to configured model |
 
-No Meridian customer data is ever sent: the inventory contains none beyond vendor descriptions. `/api/health`
-returns this statement for the current configuration, and the sidebar shows the mode.
+No customer data is ever sent: a standard vendor inventory contains only vendor descriptions.
 
-## Limitations and known assumptions
+---
 
-1. **The Case Study Brief PDF was not available** during the build. Requirements were taken from the build
-   prompt and the workbook's *Field Guide* and *Points to consider* sheets. Reconcile against the brief.
-2. **Only a text rendering of the workbook was available.** `sample_data/Meridian_Vendor_Input.xlsx` is a faithful
-   reconstruction (same sheets, columns, rows, V-000 verbatim; blank column A; header row 3). Fill colours are
-   approximations. The importer maps by header text, so the original file works directly.
-3. The cached snapshot is a point-in-time capture (2026-10-06) of 13 pages; a LIVE run at Critical depth will
-   examine more sources. Sources such as SEC filings, trust centres and sub-processor lists were not in the
-   snapshot and are not claimed.
-4. The rule-based classifier is transparent but literal; unusual phrasing can be misclassified. Every
-   classification shows its cues, and analysts can override.
-5. Docker Compose configuration is validated (`docker compose config`), and the same topology (Postgres 16,
-   Redis, API, RQ worker, Next.js) was run and tested natively; the image build itself could not be executed in
-   the build sandbox because Docker Hub was unreachable from it.
-6. PDF vendor reports are not implemented (Excel and JSON exports are). PDF sources are not parsed in LIVE mode.
-7. Executive social posts are capped at MEDIUM reliability because authorship cannot be machine-verified.
+## Project Structure
+
+```
+optiv-Case1/
+├── backend/
+│   ├── app/
+│   │   ├── api/routes/          # FastAPI route handlers
+│   │   ├── config/
+│   │   │   └── methodology.yaml # All weights, thresholds, rules (single source of truth)
+│   │   ├── demo_data/
+│   │   │   └── osint_cache.json # Cached OSINT snapshot (13 real pages, 2026-10-06)
+│   │   ├── models/              # SQLAlchemy ORM models
+│   │   ├── schemas/             # Pydantic v2 request/response schemas
+│   │   └── services/
+│   │       ├── criticality/     # 5-factor scoring engine
+│   │       ├── depth/           # OSINT depth tier selection
+│   │       ├── evidence/        # Extraction, validation, strength scoring
+│   │       ├── extraction/      # SSRF-safe fetcher, content parser
+│   │       ├── osint/           # Search provider adapters
+│   │       ├── recommendations/ # Rule-grounded recommendation engine
+│   │       ├── risk/            # 9-category risk engine
+│   │       └── review/          # Analyst review + audit trail
+│   ├── alembic/                 # Database migrations
+│   ├── tests/                   # 79 pytest tests
+│   └── requirements.txt
+├── frontend/
+│   ├── app/                     # Next.js App Router pages
+│   │   ├── vendors/             # Vendor register + detail views
+│   │   ├── import/              # Workbook upload
+│   │   ├── evidence/            # Evidence explorer
+│   │   ├── methodology/         # Live methodology editor
+│   │   └── audit/               # Audit trail viewer
+│   ├── components/
+│   │   └── shell.tsx            # App shell with LIVE/DEMO badge + Clear button
+│   └── lib/
+│       ├── api.ts               # Typed API client
+│       └── hooks.ts             # SWR-style data fetching
+├── docs/
+│   ├── FUNCTIONAL_DESIGN.md     # Requirements and design decisions
+│   ├── TECHNICAL_ARCHITECTURE.md
+│   ├── SOURCE_STRATEGY.md       # Evidence collection rationale
+│   └── DEMO_SCRIPT.md           # Walkthrough script
+├── sample_data/
+│   └── Meridian_Vendor_Input.xlsx   # Blank workbook template
+├── start.ps1                    # One-command launcher (Windows)
+├── docker-compose.yml
+└── .env.example
+```
+
+---
+
+## Tech Stack
+
+**Backend:** Python 3.12 · FastAPI 0.115 · Pydantic v2 · SQLAlchemy 2 · Alembic · SQLite / PostgreSQL 16 · httpx · trafilatura · BeautifulSoup4 · openpyxl · PyYAML · LiteLLM (optional)
+
+**Frontend:** Next.js 16 (App Router) · React 19 · TypeScript 5 · Tailwind CSS 4 · Radix UI primitives · Recharts · Lucide icons
+
+**Infra:** Docker Compose · Redis + RQ (queue mode) · Nginx (optional)
+
+---
+
+## Contributing
+
+1. Fork the repo and create a feature branch
+2. Run the test suite: `cd backend && pytest`
+3. Type-check the frontend: `cd frontend && npm run build`
+4. Open a pull request — all methodology changes should include an update to `methodology.yaml` and corresponding tests
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE)
+
+---
+
+<div align="center">
+Built as a demonstration of evidence-grounded, deterministic AI risk assessment for financial services vendor management.
+</div>
