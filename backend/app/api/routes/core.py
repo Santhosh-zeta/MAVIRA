@@ -35,6 +35,15 @@ router = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
 
 
 # ---------------------------------------------------------------- system
+@router.post("/reset")
+def reset_all_data(db: Session = Depends(get_db)):
+    """Wipe all assessment data so a fresh import can be uploaded."""
+    for model in [Evidence, Source, Assessment, AssessmentRun, AuditEvent, WorkbookImport, Vendor, MethodologyVersion]:
+        db.query(model).delete()
+    db.commit()
+    return {"status": "cleared"}
+
+
 @router.get("/health")
 def health(db: Session = Depends(get_db)):
     db.execute(select(1))

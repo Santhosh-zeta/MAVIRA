@@ -9,7 +9,11 @@ __pycache__/
 node_modules/
 .next/
 frontend/next-env.d.ts
+frontend/AGENTS.md
+frontend/CLAUDE.md
 *.db
 *.sqlite3
 *.rdb
 storage/
+*.pptx
+sample_data/*_completed.xlsx
